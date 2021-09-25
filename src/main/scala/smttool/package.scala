@@ -142,4 +142,22 @@ package object smttool {
       (sort, result)
 
   }
+
+  abstract class TopDownTransformer extends PrePostTreeTransformer {
+    type C = R
+
+    def combine(results: Seq[R]): R
+
+    final override def combine(tree: Tree, context: C, results: Seq[R]): R =
+      combine(context +: results)
+
+    final override def pre(sort: Terms.Sort, context: C): (Terms.Sort, C) =
+      (sort, context)
+
+    final override def post(sort: Terms.Sort, result: R): (Terms.Sort, R) =
+      (sort, result)
+
+    def post(term: Term, result: R): (Term, R) = (term, result)
+
+  }
 }

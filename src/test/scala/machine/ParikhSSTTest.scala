@@ -2,6 +2,7 @@ package com.github.kmn4.expresso.machine
 
 import org.scalatest.funsuite.AnyFunSuite
 import com.github.kmn4.expresso.language._
+import com.github.kmn4.expresso.IntValuedOperation
 
 class ParikhSSTTest extends AnyFunSuite {
   def testEquiv[A, B, I](t1: StringIntTransducer[A, B, I], t2: StringIntTransducer[A, B, I])(
@@ -102,7 +103,7 @@ class ParikhSSTTest extends AnyFunSuite {
   }
 
   def indexOf0(word: String, i: String) =
-    ParikhLanguage.IndexOfConst(word, 0, i).toParikhAutomaton("abcd".toSet).toIdentityParikhSST
+    IntValuedOperation.IndexOf.IndexOfConst(word, 0, i).toParikhAutomaton("abcd".toSet).toIdentityParikhSST
 
   test("Compose replaceAll and indexOf") {
     val replaceAll = Transduction.ReplaceAll("aab", "abc").toSST("abcd".toSet).toParikhSST[String, String]

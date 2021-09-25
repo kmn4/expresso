@@ -4,10 +4,13 @@ import smtlib.trees.Terms
 import smtlib.theories.Ints
 import smtlib.theories.Core
 import com.github.kmn4.expresso.smttool._
+import com.github.kmn4.expresso.math.Presburger
 
 // PyEx 用
 // SMT-LIB コマンド列の変換
-class Preprocessor(provider: VarProvider) {
+class Preprocessor(operations: Seq[Operation]) {
+
+  val provider = StdProvider
 
   private class Flattener(
       // パターンとして使う．
@@ -89,39 +92,66 @@ class Preprocessor(provider: VarProvider) {
       (resTerms, assigns)
     }
 
+    private def flattenOps(terms: Seq[Terms.Term]): (Seq[(String, Terms.Term)], Seq[Terms.Term]) = {
+      def aux(
+          assigns: Seq[(String, Terms.Term)],
+          terms: Seq[Terms.Term]
+      ): (Seq[(String, Terms.Term)], Seq[Terms.Term]) = {
+        val (flattened, newAssigns) = flattenOnce(terms)
+        if (newAssigns.isEmpty) (assigns, terms)
+        else aux(assigns ++ newAssigns, flattened)
+      }
+      aux(Nil, terms)
+    }
+
+    // 文字列操作を適用する式が平坦（つまり，部分式の高さが 0）に現れるようにする．
     def flatten(terms: Seq[Terms.Term]): (
         Seq[(String, Terms.Term)], // x = t (代入等式)
         Seq[Terms.Term], // x = y, x = w, i + j < c など (リテラル)
         Map[String, Terms.Sort] // このメソッドで新たに導入した変数のソート
     ) = {
-      var assigns = Seq.empty[(String, Terms.Term)]
-      def aux(terms: Seq[Terms.Term]): Seq[Terms.Term] = {
-        val (flattened, newAssigns) = flattenOnce(terms)
-        if (newAssigns.isEmpty) terms
-        else {
-          assigns ++= newAssigns
-          aux(flattened)
-        }
+      val (opsAssigns, opsFlattened) = flattenOps(terms)
+      val flattenAssigns = (_: Seq[(String, Terms.Term)]) flatMap {
+        case (x, t) =>
+          val (flattened, arithAssigns) = flattenArith(t)
+          (x, flattened) +: arithAssigns
       }
-      val flattened = aux(terms)
-      (assigns, flattened, sortMap(assigns.map(_._1)))
+      val assigns = flattenAssigns(opsAssigns)
+      (assigns, opsFlattened, sortMap(assigns.map(_._1)))
     }
-  }
 
-  private[expresso] def flatten(terms: Seq[Terms.Term]) = {
-    val operations: PartialFunction[Terms.Term, Terms.Sort] = {
+    // 部分式をとして葉でない算術式を含みうる式を受け取り，算術式を変数に置き換えたものに変換する．
+    // R は (置き換え後の変数, 置き換え前の算術式) の列．
+    // 算術式のシグネチャは {+, -, *} のみ．
+    private object FlattenArith extends TopDownTransformer {
+      type R = Seq[(String, Terms.Term)]
+
+      def combine(results: Seq[R]): R = results.flatten
+
+      def pre(term: Terms.Term, context: C /* この context は Nil のはず */ ): (Terms.Term, C) = term match {
+        case Ints.Neg(_) | SimpleApp("+", _) | Ints.Sub(_, _) | Ints.Mul(Terms.SNumeral(_), _) =>
+          val i = StdProvider.freshTemp()
+          registerSort(i, Ints.IntSort())
+          (SimpleQualID(i), Seq((i, term)))
+        case _ => (term, Nil)
+      }
+    }
+    private val flattenArith = (term: Terms.Term) => FlattenArith.transform(term, Nil)
+  }
+  private[expresso] val flatten = {
+    val strOps: PartialFunction[Terms.Term, Terms.Sort] = {
       case Strings.Concat(_*)          => Strings.StringSort()
       case Strings.At(_, _)            => Strings.StringSort()
-      case Strings.IndexOf(_, _, _)    => Ints.IntSort()
-      case Strings.Length(_)           => Ints.IntSort()
-      case Strings.CodeAt(_, _)        => Ints.IntSort()
-      case Strings.CountChar(_, _)     => Ints.IntSort()
       case Strings.Replace(_, _, _)    => Strings.StringSort()
       case Strings.Substring(_, _, _)  => Strings.StringSort()
       case Strings.ReplaceAll(_, _, _) => Strings.StringSort()
     }
-    val flattener = new Flattener(operations)
-    flattener.flatten(terms)
+    val lift: Operation => PartialFunction[Terms.Term, Terms.Sort] = op => {
+      case t if op.extractable(t) => op.rangeSort
+    }
+    val ops: PartialFunction[Terms.Term, Terms.Sort] = operations.map(lift).reduce(_ orElse _)
+    val flattener = new Flattener(ops orElse strOps)
+    (terms: Seq[Terms.Term]) => flattener.flatten(terms)
   }
 
   private object Folder {

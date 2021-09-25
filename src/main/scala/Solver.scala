@@ -39,18 +39,25 @@ class VarProvider(tempPrefix: String, userPrefix: String) {
   }
 }
 
+// 一時変数の導入はすべてこのオブジェクトを使う
+object StdProvider extends VarProvider("t", "u")
+
 class Solver(
     val checker: strategy.Strategy,
     print: Boolean = false,
     logger: Logger = Logger("nop"),
-    alphabet: Set[Char] = Set.empty // ADDED to the alphabet of constraints
+    alphabet: Set[Char] = Set.empty, // ADDED to the alphabet of constraints
+    operations: Seq[Operation] = Operation.builtins
 ) {
+  val intOps = operations.collect { case o: IntValuedOperation    => o }
+  val strOps = operations.collect { case o: StringValuedOperation => o }
+
   type ParikhConstraint = Constraint.ParikhConstraint[String]
 
   def setLogic(logic: SMTCommands.Logic): Unit = ()
 
   // temp_*, user_*
-  private val provider = new VarProvider("t", "u")
+  private val provider = StdProvider
   val freshTemp = () => provider.freshTemp()
 
   var env = Map.empty[String, Sort]
@@ -211,83 +218,57 @@ class Solver(
 
   implicit def formula2constraint(f: Presburger.Formula[String]): ParikhConstraint = PureIntConstraint(f)
 
-  // arbitrary int expression.
-  // ex. (+ (str.indexof x "a" 0) 1) => Add(temp_i, 1), [x ∈ IndexOfFromZero("a", temp_i)]
+  // 入力 t は整数式で，次のいずれかであるもの (c は定数，i は変数)：
+  //   (1) 通常の線形算術式 t' ::= c | i | - t' | t' + ... + t' | t' - t' | c * t
+  //   (2) 平坦な関数適用 f(a, ..., a) ただし a ::= c | i
+  // 出力は組 (s, c) で，Presburger.Term s は制約 ParikhConstraint c の下で SMTTerm t と同じ値を持つ．
+  // t が整数式でないときは例外を投げる．
+  // ex1. (str.indexof x "a" i) => Add(temp_i, 1), [x ∈ IndexOf("a", temp_i, i)]
+  // ex2. (* 4 (- 3 i)) はそのまま Presburger.Term に変換される
   def expectInt(t: SMTTerm): (Presburger.Term[String], Seq[ParikhConstraint]) = {
-    def parseAndAbstract(t: SMTTerm): (String, Seq[ParikhConstraint]) = {
-      val (pt, cs) = expectInt(t)
-      pt match {
-        case Presburger.Var(s) => (s, cs)
-        case _ => {
-          val newVar = freshTemp()
-          (newVar, cs :+ (Presburger.Var(newVar) === pt))
-        }
-      }
+    def linearExp: PartialFunction[SMTTerm, Presburger.Term[String]] = {
+      case SNumeral(i)              => Presburger.Const(i.toInt)
+      case SimpleQualID(name)       => Presburger.Var(name)
+      case Ints.Neg(t)              => Presburger.Const(0) - linearExp(t)
+      case SimpleApp("+", ts)       => Presburger.Add(ts.map(linearExp))
+      case Ints.Sub(t1, t2)         => Presburger.Sub(linearExp(t1), linearExp(t2))
+      case Ints.Mul(SNumeral(c), t) => Presburger.Mult(Presburger.Const(c.toInt), linearExp(t))
     }
-    t match {
-      case SNumeral(i)        => (Presburger.Const(i.toInt), Seq.empty)
-      case SimpleQualID(name) => (Presburger.Var(name), Seq.empty)
-      case Ints.Neg(t) =>
-        val (pt, cs) = expectInt(t)
-        (Presburger.Const(0) - pt, cs)
-      case Strings.Length(SimpleQualID(name)) =>
-        val lenVar = provider.freshTemp()
-        (Presburger.Var(lenVar), Seq(ParikhAssertion(name, ParikhLanguage.Length(lenVar))))
-      case Strings.CountChar(SimpleQualID(name), SString(w)) if w.length == 1 =>
-        val charNum = provider.freshTemp()
-        (Presburger.Var(charNum), Seq(ParikhAssertion(name, ParikhLanguage.CountChar(charNum, w(0)))))
-      case Strings.CodeAt(SimpleQualID(name), i) if env.get(name).exists(_ == StringSort()) =>
-        val c = freshTemp()
-        val (j, cs) = parseAndAbstract(i)
-        val assertion = ParikhAssertion(name, ParikhLanguage.CodeAt(j, c))
-        (Presburger.Var(c), cs :+ assertion)
-      case SimpleApp("+", ts) =>
-        val (pts, css) = ts.map(expectInt).unzip
-        (Presburger.Add(pts), css.flatten)
-      case Ints.Sub(t1, t2) =>
-        val (pt1, cs1) = expectInt(t1)
-        val (pt2, cs2) = expectInt(t2)
-        (Presburger.Sub(pt1, pt2), cs1 ++ cs2)
-      case Strings.IndexOf(SimpleQualID(name), SString(w), SNumeral(c)) if c >= 0 =>
-        val newVar = freshTemp()
-        val constr = ParikhAssertion(name, ParikhLanguage.IndexOfConst(w, c.toInt, newVar))
-        (Presburger.Var(newVar), Seq(constr))
-      case Ints.Mul(SNumeral(c), t) =>
-        val (pt, cs) = expectInt(t)
-        (Presburger.Mult(Presburger.Const(c.toInt), pt), cs)
-      case Strings.IndexOf(SimpleQualID(name), SString(w), t) =>
-        val (i, cs) = parseAndAbstract(t)
-        val j = freshTemp()
-        (Presburger.Var(j), cs :+ ParikhAssertion(name, ParikhLanguage.IndexOf(w, i, j)))
-      case _ =>
-        throw new Exception(s"${t.getPos}: Cannot interpret given S-expression ${t} as int expression")
+    val flatApp: PartialFunction[SMTTerm, (String, ParikhConstraint)] =
+      intOps.map(_.expectInt).reduce(_ orElse _)
+    val extractor =
+      linearExp.andThen((_, Seq.empty)) orElse flatApp.andThen { case (i, c) => (Presburger.Var(i), Seq(c)) }
+    try {
+      extractor(t)
+    } catch {
+      case _: MatchError =>
+        throw new Exception(s"Cannot interpret given S-expression ${t} as int expression")
     }
   }
 
-  // (substr x t1 t2) where t1 or t2 is not numeral
+  def abstractA(a: SMTTerm): (String, Seq[ParikhConstraint]) = a match {
+    case SimpleQualID(i) => (i, Seq.empty)
+    case SNumeral(c) =>
+      val i = freshTemp()
+      (i, Seq(Presburger.Var(i) === Presburger.Const(c.toInt)))
+  }
+
+  // t を文字列から文字列への関数を適用する式として解釈する．
+  // ただし，t の部分式で整数値または文字列値のであるものは，変数か定数であることを仮定する．
   def expectParikhTransduction(
       t: SMTTerm
   ): (String, ParikhTransduction[Char, String], Seq[ParikhConstraint]) = t match {
     case Strings.At(SimpleQualID(rhsVar), t) =>
-      val (pt, cs) = expectInt(t)
-      val (idx, len) = (freshTemp(), freshTemp())
+      val (idx, cs) = abstractA(t)
+      val len = freshTemp()
       val intc = Seq[ParikhConstraint](
-        pt === Presburger.Var(idx),
         Presburger.Const(1) === Presburger.Var(len)
       )
       (rhsVar, ParikhTransduction.Substr(idx, len), cs ++ intc)
     case Strings.Substring(SimpleQualID(rhsVar), t1, t2) =>
-      val (pt1, cs1) = expectInt(t1)
-      val (pt2, cs2) = expectInt(t2)
-      val (from, len) = (freshTemp(), freshTemp())
-      val intc = Seq[ParikhConstraint](pt1 === Presburger.Var(from), pt2 === Presburger.Var(len))
-      (
-        rhsVar,
-        ParikhTransduction.Substr(from, len),
-        cs1 ++ cs2 ++ intc
-      )
-    // TODO プリプロセス後は getPos できないので，他も修正
-    // case _ => throw new Exception(s"${t.getPos}: Cannot interpret given S-expression ${t} as transduction")
+      val (from, cs1) = abstractA(t1)
+      val (len, cs2) = abstractA(t2)
+      (rhsVar, ParikhTransduction.Substr(from, len), cs1 ++ cs2)
     case _ => throw new Exception(s"Cannot interpret given S-expression ${t} as transduction")
   }
 
@@ -418,7 +399,7 @@ class Solver(
   }
 
   private def preprocess(commands: Seq[SMTCommands.Command]): Seq[SMTCommands.Command] = {
-    val (res, varMap) = new Preprocessor(provider).preprocess(commands)
+    val (res, varMap) = (new Preprocessor(operations)).preprocess(commands)
     userRepr = varMap
     res
   }
@@ -476,7 +457,7 @@ class Solver(
 
 }
 
-trait Escape  {
+trait Escape {
   def unescape(w: String): String
 }
 
@@ -511,12 +492,12 @@ object PyExEscape extends Escape {
   def unescape(w: String): String = func(w)
 }
 
-// \u{61} => a
+// \\u{61} => a
 object SMTLIBEscape extends Escape {
   private val pat = raw"\\u\{([\da-f]{1,5})\}".r
   private val fromHex = (s: String) => Integer.parseInt(s, 16).toChar.toString
   def apply(s: String): String = s.map(c => s"\\u{${c.toHexString}}").mkString
-  // Java の Matcher#replaceAll は挙動がおかしいので \u{5c} に対して失敗する
+  // Java の Matcher#replaceAll は挙動がおかしいので \\u{5c} に対して失敗する
   // (replacer の結果内の \ をエスケープ用プレフィックスと考える)
   def unescape(withEscape: String): String = pat.replaceAllIn(withEscape, m => fromHex(m.group(1)))
 }
