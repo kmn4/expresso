@@ -2,7 +2,6 @@ package com.github.kmn4.expresso.language
 
 import com.github.kmn4.expresso._
 import com.github.kmn4.expresso.math._
-import com.github.kmn4.expresso.math.MonadPlus.MonadPlusOps
 import com.github.kmn4.expresso.machine._
 
 /** グループ変数 X で添字付けられたキャプチャグループの括弧 */
@@ -36,107 +35,6 @@ sealed trait PCRE[A, X] {
   }
 
   def groupVars: Set[X] = groupVarTrees.flatMap(_.toSeq).toSet
-
-  private def derive[M[_]](a: A)(implicit mp: MonadPlus[M]): M[(Option[PCRE[A, X]], Parsed)] =
-    this match {
-      case PCRE.Empty()   => mp.empty
-      case PCRE.Eps()     => mp((None, Seq.empty))
-      case PCRE.Chars(as) => if (as(a)) mp.apply((Some(PCRE.Eps()), Seq(Left(a)))) else mp.empty
-      case PCRE.AllChar() => mp.apply((Some(PCRE.Eps()), Seq(Left(a))))
-      case PCRE.Cat(e1, e2) =>
-        e1.derive(a) >>= {
-          case (Some(e), w) => mp((Some(PCRE.Cat(e, e2)), w))
-          case (None, w)    => e2.derive(a) >>= { case (e, u) => mp(e, w ++ u) }
-        }
-      case PCRE.Alt(e1, e2) => e1.derive(a) ++ e2.derive(a)
-      case PCRE.Greedy(e) =>
-        val derived =
-          e.derive(a) >>= [(Option[PCRE[A, X]], Parsed)] {
-            case (Some(f), w) => mp((Some(PCRE.Cat(f, PCRE.Greedy(e))), w))
-            case (None, w)    => mp((None, w))
-          }
-        derived ++ mp((None, Seq.empty))
-      case PCRE.NonGreedy(e) =>
-        val derived =
-          e.derive(a) >>= [(Option[PCRE[A, X]], Parsed)] {
-            case (Some(f), w) => mp((Some(PCRE.Cat(f, PCRE.NonGreedy(e))), w))
-            case (None, w)    => mp((None, w))
-          }
-        mp[(Option[PCRE[A, X]], Parsed)]((None, Seq.empty)) ++ derived
-      case PCRE.Group(e, x) =>
-        e.derive(a) >>= {
-          case (Some(e), w) => mp((Some(PCRE.GDeriv(e, x)), Right(LPar(x)) +: w))
-          case (None, w)    => mp((None, Right(LPar(x)) +: w :+ Right(RPar(x))))
-        }
-      case PCRE.GDeriv(e, x) =>
-        e.derive(a) >>= {
-          case (Some(e), w) => mp((Some(PCRE.GDeriv(e, x)), w))
-          case (None, w)    => mp((None, w :+ Right(RPar(x))))
-        }
-    }
-
-  private def matchOne[M[_]](a: A)(implicit mp: MonadPlus[M]): M[(PCRE[A, X], Parsed)] =
-    derive(a) >>= {
-      case (Some(e), w) => mp((e, w))
-      case (None, _)    => mp.empty
-    }
-
-  private def matchSeq[M[_]](as: Seq[A])(implicit mp: MonadPlus[M]): M[(PCRE[A, X], Parsed)] =
-    as.foldLeft(mp((this, Seq.empty[ParsedChar]))) {
-      case (m, a) => m >>= { case (e, w) => e.matchOne(a) map { case (e, u) => (e, w ++ u) } }
-    }
-
-  private def deriveEps[M[_]](implicit mp: MonadPlus[M]): M[Parsed] = this match {
-    case PCRE.Empty() | PCRE.Chars(_) | PCRE.AllChar() => mp.empty
-    case PCRE.Eps()                                    => mp(Seq.empty)
-    case PCRE.Cat(e1, e2)                              => for (w <- e1.deriveEps; u <- e2.deriveEps) yield w ++ u
-    case PCRE.Alt(e1, e2)                              => e1.deriveEps ++ e2.deriveEps
-    case PCRE.Greedy(e)                                => e.deriveEps ++ mp(Seq.empty)
-    case PCRE.NonGreedy(e)                             => mp(Seq.empty)
-    case PCRE.Group(e, x)                              => e.deriveEps.map(Right(LPar(x)) +: _ :+ Right(RPar(x)))
-    case PCRE.GDeriv(e, x)                             => e.deriveEps.map(_ :+ Right(RPar(x)))
-  }
-
-  private[language] def toParser(
-      alphabet: Set[A]
-  ): NGSM[NonEmptyDistinctSeq[PCRE[A, X]], A, ParsedChar] = {
-    require(usedChars subsetOf alphabet)
-    type Q = NonEmptyDistinctSeq[PCRE[A, X]]
-    val q0 = NonEmptyDistinctSeq(this, Seq.empty)
-    def nextStates(q: Q, a: A): Set[(Q, Parsed)] = {
-      val NonEmptyDistinctSeq(lowest, highers) = q
-      // In [..., (e, w1), ..., (e, w2), ...], (e, w2) will never be taken as parse result.
-      // distinctBy(_._1) removes this.
-
-      // Expressions with higher precedences.
-      val nextHighers = (highers.reverse >>= (_.matchOne(a))).map(_._1).distinct.reverse
-      @scala.annotation.tailrec
-      def aux(acc: Set[(Q, Parsed)], l: Seq[(PCRE[A, X], Parsed)]): Set[(Q, Parsed)] =
-        l match {
-          case Nil                                    => acc
-          case (e, w) :: tl if nextHighers contains e => aux(acc, tl)
-          case (hd @ (e, w)) :: tl =>
-            val newQ = NonEmptyDistinctSeq(e, tl.map(_._1) ++ nextHighers)
-            aux(acc + ((newQ, w)), tl)
-        }
-      aux(Set.empty, lowest.matchOne(a).distinctBy(_._1).reverse)
-    }
-    val (states, edges) = searchStates(Set(q0), alphabet)(nextStates)(
-      { case (r, _)         => r },
-      { case (q, a, (r, w)) => (q, a, w, r) }
-    )
-    val outGraph = for {
-      q @ NonEmptyDistinctSeq(lowest, highers) <- states if highers.forall(_.deriveEps.isEmpty)
-      w <- lowest.deriveEps.headOption
-    } yield q -> w
-    NGSM(
-      states,
-      alphabet,
-      edges,
-      q0,
-      outGraph
-    )
-  }
 
   override def toString(): String = this match {
     case PCRE.Empty() => "∅"

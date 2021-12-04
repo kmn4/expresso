@@ -243,7 +243,7 @@ object Transduction {
         case Right(x) => Cop1(x)
       }
       CompileJavaScriptRegex.toReplaceAllSST(e, alphabet, repl.toList).renamed
-      //Compiler.replaceAllSST(target, replacement, alphabet)
+      // CompilePerlRegex.replaceAllSST(target, replacement, alphabet)
     }
 
   }
@@ -259,7 +259,7 @@ object Transduction {
         case Right(x) => Cop1(x)
       }
       CompileJavaScriptRegex.toReplaceFirstSST(e, alphabet, repl.toList).renamed
-      //Compiler.replaceSST(target, replacement, alphabet)
+      //CompilePerlRegex.replaceSST(target, replacement, alphabet)
     }
   }
 

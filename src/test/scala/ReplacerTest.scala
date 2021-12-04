@@ -5,8 +5,7 @@ import com.github.kmn4.expresso.language.PCRE._
 import org.scalactic.source.Position
 
 class ReplacerTest extends AnyFunSuite {
-  private type ParsedChar[A, X] = PCRE[A, X]#ParsedChar
-  private type Parsed[A, X] = PCRE[A, X]#Parsed
+  import CompilePerlRegex.{ParsedChar, Parsed}
 
   def empty: PCRE[Char, String] = Empty()
   def eps: PCRE[Char, String] = Eps()
@@ -16,7 +15,7 @@ class ReplacerTest extends AnyFunSuite {
   def greedy(e: PCRE[Char, String]): PCRE[Char, String] = Greedy(e)
   def nonGreedy(e: PCRE[Char, String]): PCRE[Char, String] = NonGreedy(e)
   def group(e: PCRE[Char, String], x: String): PCRE[Char, String] = Group(e, x)
-  def gderiv(e: PCRE[Char, String], x: String): PCRE[Char, String] = GDeriv(e, x)
+  def dot: PCRE[Char, String]                                                 = PCRE.AllChar()
 
   def firstMatch[A, X](e: PCRE[A, X]): PCRE[A, X] =
     PCRE.Cat(PCRE.Cat(PCRE.NonGreedy(PCRE.Chars(e.usedChars)), e), PCRE.Greedy(PCRE.Chars(e.usedChars)))
@@ -34,7 +33,7 @@ class ReplacerTest extends AnyFunSuite {
   val alphabet = ('a' to 'z').toSet
 
   def exec(e: PCRE[Char, String], w: Seq[Char]) = {
-    val p = e.toParser(alphabet)
+    val p         = CompilePerlRegex.toParser(e, alphabet)
     val parsedSet = p.transduce(w).map(prettyParsed)
     assert(parsedSet.size <= 1)
     val parseResult = parsedSet.headOption.map(w => s"""\"$w\"""").getOrElse("No match")
@@ -141,7 +140,7 @@ class ReplacerTest extends AnyFunSuite {
   )
   // (?<x>|.) => ($<x>)
   testReplaceAll(group(alt(eps, dot), "x"), replacement('(', "x", ')'))(
-    ("aba", "()a()b()a()")
+    ("aba", "()a()b()a()") // これは JS の場合。PCRE では "()(a)()(b)()(a)()" が正しい
   )
   // (?<x>aa*) => ($<x>)
   testReplaceAll(group(cat("a", greedy("a")), "x"), replacement('(', "x", ')'))(
