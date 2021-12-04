@@ -31,7 +31,7 @@ class ReplacerTest extends AnyFunSuite {
   def prettyParsed(w: Parsed[Char, String]): String = w.map(prettyParsedChar).mkString
 
   // Set of alphabet used in all of tests in this class.
-  val alphabet = "abc".toSet
+  val alphabet = ('a' to 'z').toSet
 
   def exec(e: PCRE[Char, String], w: Seq[Char]) = {
     val p = e.toParser(alphabet)
@@ -51,10 +51,16 @@ class ReplacerTest extends AnyFunSuite {
   execAll(firstMatch(group(cat(greedy("a"), group(greedy("b"), "y")), "x")))("aaabba", "", "bb")
   execAll(repetitiveMatch(group(cat(greedy("a"), group(greedy("b"), "y")), "x")))("aaabba", "", "bb")
 
+  def replacementToString(r: Replacement[Char, String]) = r.word.map {
+    case Left(c)        => c.toString()
+    case Right(Some(x)) => s"$$<$x>"
+    case Right(None)    => s"$$&"
+  }.mkString
+
   def testReplaceAll(e: PCRE[Char, String], replacement: Replacement[Char, String])(
       cases: (Seq[Char], Seq[Char])*
-  )(implicit pos: Position) = test(s"Replace all $e with $replacement") {
-    val s = Compiler.replaceAllSST(e, replacement, alphabet)
+  )(implicit pos: Position) = test(s"ReplaceAll:\t$e\t=> ${replacementToString(replacement)}") {
+    val s = Transduction.ReplacePCREAll(e, replacement).toSST(alphabet)
     for ((w, expected) <- cases) {
       val got = s.transduce(w)
       assert(got.size == 1)
@@ -64,8 +70,8 @@ class ReplacerTest extends AnyFunSuite {
 
   def testReplace(e: PCRE[Char, String], replacement: Replacement[Char, String])(
       cases: (Seq[Char], Seq[Char])*
-  )(implicit pos: Position) = test(s"Replace the first $e with $replacement") {
-    val s = Compiler.replaceSST(e, replacement, alphabet)
+  )(implicit pos: Position) = test(s"ReplaceAll:\t$e\t=>\t${replacementToString(replacement)}") {
+    val s = Transduction.ReplacePCRE(e, replacement).toSST(alphabet)
     for ((w, expected) <- cases) {
       val got = s.transduce(w)
       assert(got.size == 1)
@@ -81,6 +87,7 @@ class ReplacerTest extends AnyFunSuite {
     }
   )
 
+  // a => b
   testReplace("a", replacement('b'))(
     ("", ""),
     ("aaa", "baa"),
@@ -88,18 +95,22 @@ class ReplacerTest extends AnyFunSuite {
     ("bbb", "bbb")
   )
 
+  // a(b|c)* => a$&a
   testReplaceAll(cat("a", greedy(alt("b", "c"))), replacement('a', 0, 'a'))(
     ("abc", "aabca"),
     ("abca", "aabcaaaa")
   )
 
+  // (?<x>a*)(?<y>b*)(?<z>c*) => $<z>$<y>$<x>
   testReplaceAll(
     cat(group(greedy("a"), "x"), group(greedy("b"), "y"), group(greedy("c"), "z")),
     replacement("z", "y", "x")
   )(("aabbcc", "ccbbaa"), ("bbc", "cbb"), ("bab", "bba"))
 
+  // ([ab])* => $&$&$&
   testReplaceAll(greedy("ab"), replacement(0, 0, 0))(("ab", "ababab"), ("", ""), ("b", "bbb"))
 
+  // (?<z>(?<x>a*)(?<y>b*))	=> $<x>$<y>$<z>
   testReplaceAll(
     group(cat(group(greedy("a"), "x"), group(greedy("b"), "y")), "z"),
     replacement("x", "y", "z")
@@ -109,14 +120,35 @@ class ReplacerTest extends AnyFunSuite {
     ("", "")
   )
 
+  // a* => ($&)
   testReplaceAll(greedy("a"), replacement('(', 0, ')'))(("", "()"), ("a", "(a)()"))
-
+  // a*?b => c
   testReplaceAll(cat(nonGreedy("a"), "b"), replacement('c'))(("baab", "cc"))
+  // a*b => c
   testReplaceAll(cat(greedy("a"), "b"), replacement('c'))(("baab", "cc"))
+  // [abc]*?b => c
   testReplaceAll(cat(nonGreedy("abc"), "b"), replacement('c'))(("abb", "cc"))
+  // [abc]*b => c
   testReplaceAll(cat(greedy("abc"), "b"), replacement('c'))(("abb", "c"))
-
+  // (?<x>[abc]*?)b => c$<x>
   testReplaceAll(cat(group(nonGreedy("abc"), "x"), "b"), replacement('c', "x"))(("abb", "cac"))
+
+  // (?<x>.) => ($<x>)
+  testReplaceAll(group(dot, "x"), replacement('(', "x", ')'))(("aba", "(a)(b)(a)"))
+  // (?<x>(?<y>.*?)*) => [$<y>,$<x>]
+  testReplaceAll(group(greedy(group(dot, "y")), "x"), replacement('[', "y", ',', "x", ']'))(
+    ("abc", "[c,abc][,]")
+  )
+  // (?<x>|.) => ($<x>)
+  testReplaceAll(group(alt(eps, dot), "x"), replacement('(', "x", ')'))(
+    ("aba", "()a()b()a()")
+  )
+  // (?<x>aa*) => ($<x>)
+  testReplaceAll(group(cat("a", greedy("a")), "x"), replacement('(', "x", ')'))(
+    ("a", "(a)"),
+    ("bbaabab", "bb(aa)b(a)b"),
+    ("aabbabb", "(aa)bb(a)bb")
+  )
 
   // Bugs (nullable regexes that put higher precedence on the empty string)
   // testReplaceAll(eps, replacement('(', 0, ')'))(("a", "()a()"))

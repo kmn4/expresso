@@ -39,6 +39,11 @@ package object expresso {
       }
       (aBuilder.result(), bBuilder.result())
     }
+
+    def identity[X, A](xs: Iterable[X]): Update[X, A] =
+      Map.from(for (x <- xs) yield x -> List(Cop1(x)))
+
+    def reset[X, A](xs: Iterable[X]): Update[X, A] = xs.map(_ -> Nil).toMap
   }
 
   implicit class UpdateOps[X, B](m: Update[X, B]) {

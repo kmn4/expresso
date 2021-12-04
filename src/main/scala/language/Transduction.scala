@@ -229,13 +229,22 @@ object Transduction {
     }
   }
 
+  /** 優先度を考慮する正規表現文字列置換。 名前は PCRE だが現在は JavaScript の意味論で動作する。
+    */
   case class ReplacePCREAll[A, X](target: PCRE[A, X], replacement: Replacement[A, X])
       extends Transduction[A] {
 
     override def usedAlphabet: Set[A] = target.usedChars
 
-    override def toSST(alphabet: Set[A]): NSST[Int, A, A, Int] =
-      Compiler.replaceAllSST(target, replacement, alphabet)
+    override def toSST(alphabet: Set[A]): NSST[Int, A, A, Int] = {
+      val e = PCRE.Group(target.renameVars[Option[X]](Some.apply), None)
+      val repl = replacement.word.map {
+        case Left(a)  => Cop2(a)
+        case Right(x) => Cop1(x)
+      }
+      CompileJavaScriptRegex.toReplaceAllSST(e, alphabet, repl.toList).renamed
+      //Compiler.replaceAllSST(target, replacement, alphabet)
+    }
 
   }
 
@@ -243,8 +252,15 @@ object Transduction {
 
     override def usedAlphabet: Set[A] = target.usedChars
 
-    override def toSST(alphabet: Set[A]): NSST[Int, A, A, Int] =
-      Compiler.replaceSST(target, replacement, alphabet)
+    override def toSST(alphabet: Set[A]): NSST[Int, A, A, Int] = {
+      val e = PCRE.Group(target.renameVars[Option[X]](Some.apply), None)
+      val repl = replacement.word.map {
+        case Left(a)  => Cop2(a)
+        case Right(x) => Cop1(x)
+      }
+      CompileJavaScriptRegex.toReplaceFirstSST(e, alphabet, repl.toList).renamed
+      //Compiler.replaceSST(target, replacement, alphabet)
+    }
   }
 
 }
