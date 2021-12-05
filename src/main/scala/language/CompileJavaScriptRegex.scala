@@ -35,14 +35,18 @@ object CompileJavaScriptRegex {
             case (Some(f), w) => mp((Some(PCRE.Cat(f, PCRE.Greedy(e))), w))
             case (None, w)    => mp.empty // JS ではスターの内側が空文字列にマッチしない
           }
-        derived ++ mp(None)
+        // 展開せず空文字列にマッチさせた場合、内側は `undefined` (JS) になる。
+        // 置換文字列の構成で undefined 値が参照されると、空文字列として扱われる。
+        val epsMatchUpdate = e.groupVars.map(_ -> Nil).toMap
+        derived ++ mp((None, epsMatchUpdate))
       case PCRE.NonGreedy(e) =>
         val derived =
           derive(a)(e) >>= [(RegO, Update)] {
             case (Some(f), w) => mp((Some(PCRE.Cat(f, PCRE.NonGreedy(e))), w))
             case (None, w)    => mp.empty
           }
-        mp[(RegO, Update)](None) ++ derived
+        val epsMatchUpdate = e.groupVars.map(_ -> Nil).toMap
+        mp[(RegO, Update)]((None, epsMatchUpdate)) ++ derived
       case PCRE.Group(e, x) =>
         derive(a)(e) >>= {
           case (Some(e), w) => mp((Some(PCRE.GDeriv(e, x)), w + (x -> List(Cop2(a)))))

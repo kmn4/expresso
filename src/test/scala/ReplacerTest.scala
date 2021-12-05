@@ -148,6 +148,10 @@ class ReplacerTest extends AnyFunSuite {
     ("bbaabab", "bb(aa)b(a)b"),
     ("aabbabb", "(aa)bb(a)bb")
   )
+  // ((?<x>a)*b)* => [($&),($<x>)]
+  testReplaceAll(greedy(cat(greedy(group("a", "x")), "b")), replacement('[', 0, ',', "x", ']'))(
+    ("abb", "[abb,][,]")
+  )
 
   // Bugs (nullable regexes that put higher precedence on the empty string)
   // testReplaceAll(eps, replacement('(', 0, ')'))(("a", "()a()"))
