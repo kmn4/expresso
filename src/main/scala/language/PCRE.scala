@@ -9,10 +9,9 @@ private sealed trait Paren[X]
 private case class LPar[X](x: X) extends Paren[X]
 private case class RPar[X](x: X) extends Paren[X]
 
+/** 優先度を考慮する正規表現のための構文。
+  */
 sealed trait PCRE[A, X] {
-  private[language] type ParsedChar = Either[A, Paren[X]]
-  private[language] type Parsed = Seq[ParsedChar]
-
   def usedChars: Set[A] = this match {
     case PCRE.Chars(as)                             => as
     case PCRE.Cat(e1, e2)                           => e1.usedChars ++ e2.usedChars

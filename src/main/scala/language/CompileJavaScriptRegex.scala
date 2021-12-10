@@ -9,7 +9,7 @@ import com.github.kmn4.expresso.Cupstar
 
 object CompileJavaScriptRegex {
 
-  def derive[A, X, M[_]](
+  private def derive[A, X, M[_]](
       a: A
   )(e: PCRE[A, X])(implicit mp: MonadPlus[M]): M[(Option[PCRE[A, X]], Update[X, A])] = {
     type RegO   = Option[PCRE[A, X]]
@@ -70,7 +70,7 @@ object CompileJavaScriptRegex {
   }
 
   // e を空文字列にマッチさせるとき、e に現れるグループ変数を更新する方法
-  def deriveEps[A, X, M[_]](e: PCRE[A, X])(implicit mp: MonadPlus[M]): M[Update[X, A]] = e match {
+  private def deriveEps[A, X, M[_]](e: PCRE[A, X])(implicit mp: MonadPlus[M]): M[Update[X, A]] = e match {
     case PCRE.Empty() | PCRE.Chars(_) | PCRE.AllChar() => mp.empty
     case PCRE.Eps()                                    => mp(Map.empty)
     case PCRE.Cat(e1, e2)  => for (w <- deriveEps(e1); u <- deriveEps(e2)) yield w ++ u
@@ -112,8 +112,8 @@ object CompileJavaScriptRegex {
       { case (q, a, (r, w)) => (q, a, w, r) }
     )
     val outGraph = for {
-      q @ NonEmptyNub.InitLast(highers, lowest) <- states if highers.forall(deriveEps(_).isEmpty)
-      m                                         <- deriveEps(lowest).headOption
+      q <- states if q.init.forall(deriveEps(_).isEmpty)
+      m <- deriveEps(q.last).headOption
     } yield q -> (Update.identity(e.groupVars) ++ m).subst(replacement)
 
     NSST(
