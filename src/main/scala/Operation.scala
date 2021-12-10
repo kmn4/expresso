@@ -25,7 +25,7 @@ object Operation {
 }
 
 trait IntValuedOperation extends Operation {
-  /** 
+  /**
     * この操作 f が i = f(x, i1, ..., in) のように使われているとき，
     * x \in Lang(i, i1, ..., in) がこの等式と等価になるような言語．
     */
@@ -61,6 +61,7 @@ object IntValuedOperation {
     case Terms.SNumeral(c) =>
       val i = StdProvider.freshTemp()
       (i, Seq(Presburger.Var[Either[String, Int]](Left(i)) === Presburger.Const(c.toInt)))
+    case _ => throw new MatchError("abstractA: argument is neither a variable nor numeral: " + a)
   }
 
   object Length extends IntValuedOperation {

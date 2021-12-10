@@ -251,6 +251,7 @@ class Solver(
     case SNumeral(c) =>
       val i = freshTemp()
       (i, Seq(Presburger.Var(i) === Presburger.Const(c.toInt)))
+    case _ => throw new MatchError("abstractA: argument is neither a variable nor numeral: " + a)
   }
 
   // t を文字列から文字列への関数を適用する式として解釈する．

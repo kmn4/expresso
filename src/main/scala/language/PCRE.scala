@@ -30,8 +30,8 @@ sealed trait PCRE[A, X] {
     case PCRE.Alt(e1, e2)                                           => e1.groupVarTrees ++ e2.groupVarTrees
     case PCRE.Greedy(e)                                             => e.groupVarTrees
     case PCRE.NonGreedy(e)                                          => e.groupVarTrees
-    case PCRE.Group(e, x)                                           => Seq(Node(x, e.groupVarTrees: _*))
-    case PCRE.GDeriv(e, x)                                          => Seq(Node(x, e.groupVarTrees: _*))
+    case PCRE.Group(e, x)                                           => Seq(Tree(x, e.groupVarTrees: _*))
+    case PCRE.GDeriv(e, x)                                          => Seq(Tree(x, e.groupVarTrees: _*))
   }
 
   def groupVars: Set[X] = groupVarTrees.flatMap(_.toSeq).toSet
