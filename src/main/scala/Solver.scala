@@ -219,25 +219,25 @@ class Solver(
   implicit def formula2constraint(f: Presburger.Formula[String]): ParikhConstraint = PureIntConstraint(f)
 
   // 入力 t は整数式で，次のいずれかであるもの (c は定数，i は変数)：
-  //   (1) 通常の線形算術式 t' ::= c | i | - t' | t' + ... + t' | t' - t' | c * t
+  //   (1) 通常の算術式 t' ::= c | i | - t' | t' + ... + t' | t' - t' | t * t
   //   (2) 平坦な関数適用 f(a, ..., a) ただし a ::= c | i
   // 出力は組 (s, c) で，Presburger.Term s は制約 ParikhConstraint c の下で SMTTerm t と同じ値を持つ．
   // t が整数式でないときは例外を投げる．
   // ex1. (str.indexof x "a" i) => Add(temp_i, 1), [x ∈ IndexOf("a", temp_i, i)]
   // ex2. (* 4 (- 3 i)) はそのまま Presburger.Term に変換される
   def expectInt(t: SMTTerm): (Presburger.Term[String], Seq[ParikhConstraint]) = {
-    def linearExp: PartialFunction[SMTTerm, Presburger.Term[String]] = {
+    def intExp: PartialFunction[SMTTerm, Presburger.Term[String]] = {
       case SNumeral(i)              => Presburger.Const(i.toInt)
       case SimpleQualID(name)       => Presburger.Var(name)
-      case Ints.Neg(t)              => Presburger.Const(0) - linearExp(t)
-      case SimpleApp("+", ts)       => Presburger.Add(ts.map(linearExp))
-      case Ints.Sub(t1, t2)         => Presburger.Sub(linearExp(t1), linearExp(t2))
-      case Ints.Mul(SNumeral(c), t) => Presburger.Mult(Presburger.Const(c.toInt), linearExp(t))
+      case Ints.Neg(t)              => Presburger.Const(0) - intExp(t)
+      case SimpleApp("+", ts)       => Presburger.Add(ts.map(intExp))
+      case Ints.Sub(t1, t2)         => Presburger.Sub(intExp(t1), intExp(t2))
+      case Ints.Mul(c, t) => Presburger.Mult(intExp(c), intExp(t))
     }
     val flatApp: PartialFunction[SMTTerm, (String, ParikhConstraint)] =
       intOps.map(_.expectInt).reduce(_ orElse _)
     val extractor =
-      linearExp.andThen((_, Seq.empty)) orElse flatApp.andThen { case (i, c) => (Presburger.Var(i), Seq(c)) }
+      intExp.andThen((_, Seq.empty)) orElse flatApp.andThen { case (i, c) => (Presburger.Var(i), Seq(c)) }
     try {
       extractor(t)
     } catch {

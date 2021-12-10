@@ -98,6 +98,21 @@ class ParikhSolverTest extends AnyFunSuite {
         withExecuteFile(name) { solver => assert(solver.getModel().isEmpty) }
       }
 
+    // 非線形算術
+    testSAT("""
+(declare-const x String)
+(declare-const i Int)
+(assert (= (str.len x) (* i i)))
+(assert (> i 1))
+(check-sat)
+(get-model)
+""") { (sm, im) =>
+      val x = sm("x")
+      val i = im("i")
+      assert(i > 1)
+      assert(x.length == i * i)
+    }
+
     testFileSAT("deleteall") { (sm, _) =>
       val (x0, x1, y0, y1, xy) = (sm("x0"), sm("x1"), sm("y0"), sm("y1"), sm("xy"))
       assert(x1 == x0.replaceAll("<script>", ""))
@@ -354,7 +369,7 @@ class ParikhSolverTest extends AnyFunSuite {
       }
 
     testFileUNSAT("count_char_1")
-    testFileSAT("count_char_2") { (m, _) => 
+    testFileSAT("count_char_2") { (m, _) =>
       val x = m("x")
       assert(x == "aaaaabbbbb")
     }
