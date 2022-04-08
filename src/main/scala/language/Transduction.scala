@@ -303,6 +303,7 @@ object ParikhTransduction {
           Iterable(
             (0, a, seek, 0),
             (0, a, take, 1),
+            (0, a, ignore, 2),
             (1, a, take, 1),
             (1, a, ignore, 2),
             (2, a, ignore, 2)
@@ -310,11 +311,17 @@ object ParikhTransduction {
         }
         .map { case (q, a, (mx, mh), r) => (q, a, mx, mh, r) }
       val acceptFormulas = {
-        val idxOutOrNegLen = idx < 0 || idx >= input || len <= 0
         Seq(
-          idxOutOrNegLen ==> (taken === 0),
-          (!idxOutOrNegLen && len <= input - idx) ==> (sought === idx && taken === len),
-          (!idxOutOrNegLen && len > input - idx) ==> (sought === idx && taken === input - idx)
+          // sought は idx が負なら max(input+idx, 0)
+          // idx が範囲内なら idx
+          (idx < 0 && input + idx >= 0) ==> (sought === input + idx),
+          (idx < 0 && input + idx < 0) ==> (sought === 0),
+          (idx >= 0 && idx < input) ==> (sought === idx),
+          // taken は idx が大きい時と len が負の時 0
+          // そうでなければ min(len, input-sought)
+          (idx >= input || len <= 0) ==> (taken === 0),
+          (idx < input && len > 0 && len > input - sought) ==> (taken === input - sought),
+          (idx < input && len > 0 && len <= input - sought) ==> (taken === len)
         )
       }
       ParikhSST[Int, A, A, Int, Int, I](
