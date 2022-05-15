@@ -8,7 +8,8 @@ libraryDependencies ++= Seq(
   "org.scalatest" %% "scalatest" % "3.1.0" % "test",
   "com.typesafe.scala-logging" %% "scala-logging" % "3.9.2",
   "ch.qos.logback" % "logback-classic" % "1.2.3",
-  "com.regblanc" %% "scala-smtlib" % "0.2.1-42-gc68dbaa"
+  "com.regblanc" %% "scala-smtlib" % "0.2.1-42-gc68dbaa",
+  "com.github.scopt" %% "scopt" % "4.0.1",
 )
 
 scalacOptions ++= Seq(
