@@ -294,6 +294,7 @@ object Presburger {
       def <=(s: Term[X]): Formula[X] = Le(t, s)
       def >(s: Term[X]): Formula[X] = Gt(t, s)
       def >=(s: Term[X]): Formula[X] = Ge(t, s)
+      def !==(s: Term[X]): Formula[X] = !(t === s)
     }
     implicit class FormulaOps[X](f: Formula[X]) {
       def unary_! : Formula[X] = Not(f)
