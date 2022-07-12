@@ -19,6 +19,8 @@ abstract class StreamingDataStringTransducer[D, I, O] protected {
   // WARN: be careful when overriding the following `def`s.
   //   otherwise an exception may be thrown during evaluation of `require`s below.
   def states: Set[State]
+  def inputTags: Set[InputTag]
+  def outputTags: Set[OutputTag]
   def dataVars: Set[DataVar]
   def listVars: Set[ListVar]
   def curr: DataVar
@@ -28,10 +30,10 @@ abstract class StreamingDataStringTransducer[D, I, O] protected {
 
   // 匿名クラス構文 new StreamingDataStringTransducer { ... } によってインスタンスを生成するとき、
   // 上記の def を val で実装すると、states == null などとなった状態で以下の require が評価され例外が送出される。
-  // { ... } に記した内容が、このクラスのコンストラクタより前に評価されればよくて、
+  // { ... } に記述する内容が、このクラスのコンストラクタより前に評価されればよくて、
   // そのために early initialization という機構が Scala 2.12 まではあったのだが、Scala 2.13 で deprecated となり、
   // Scala 3 でドロップされた。
-  // 残された回避方法として lazy val やサブクラスでのコンストラクタパラメータがある。
+  // 残された回避方法として lazy val やサブクラスでのパラメトリックフィールド化がある。
   // 参考:
   //   https://docs.scala-lang.org/tutorials/FAQ/initialization-order.html
   //   https://docs.scala-lang.org/scala3/reference/other-new-features/trait-parameters.html
@@ -64,8 +66,10 @@ abstract class StreamingDataStringTransducer[D, I, O] protected {
 
 abstract class SimpleStreamingDataStringTransducer[D] extends StreamingDataStringTransducer[D, Unit, Unit] {
   type DataVar = Unit
-  lazy val dataVars: Set[Unit] = Set(())
-  lazy val curr: DataVar       = ()
+  lazy val inputTags: Set[types.InputTag]   = Set(())
+  lazy val outputTags: Set[types.OutputTag] = Set(())
+  lazy val dataVars: Set[DataVar]           = Set(())
+  lazy val curr: DataVar                    = ()
 }
 
 object SimpleStreamingDataStringTransducer { outer =>
@@ -82,7 +86,8 @@ object SimpleStreamingDataStringTransducer { outer =>
     def SimpleEdge(p: State, u: Update, q: State): Edge = (p, itag, noguard, u, q)
   }
 
-  abstract class Factory[D, Q, X](val types: SimpleDatastringTransducerTypes[Q, X]) {
+  abstract class Factory[D, Q, X] private {
+    val types: SimpleDatastringTransducerTypes[Q, X]
     def apply(
         states: Set[Q],
         listVars: Set[X],
@@ -92,32 +97,69 @@ object SimpleStreamingDataStringTransducer { outer =>
     ): SimpleStreamingDataStringTransducer[D]
   }
 
-  def factory[D, Q, X] = new Factory[D, Q, X](new SimpleDatastringTransducerTypes[Q, X] {}) { factory =>
-    import types._
-    def apply(
-        states: Set[Q],
-        listVars: Set[X],
-        transitions: Set[Edge],
-        initialStates: Set[Q],
-        outputRelation: Set[(Q, ListSpec)]
-    ): SimpleStreamingDataStringTransducer[D] = new SimpleStreamingDataStringTransducerImpl(types)(
-      states,
-      listVars,
-      transitions,
-      initialStates,
-      outputRelation,
-    )
+  private object Factory {
+    def apply[D, Q, X]() = new Factory[D, Q, X] { factory =>
+      val types = new SimpleDatastringTransducerTypes[Q, X] {}
+      import types._
+      def apply(
+          states: Set[Q],
+          listVars: Set[X],
+          transitions: Set[Edge],
+          initialStates: Set[Q],
+          outputRelation: Set[(Q, ListSpec)]
+      ): SimpleStreamingDataStringTransducer[D] = new SimpleStreamingDataStringTransducerImpl(types)(
+        states,
+        listVars,
+        transitions,
+        initialStates,
+        outputRelation,
+      )
 
-    class SimpleStreamingDataStringTransducerImpl(val types: factory.types.type)(
-        val states: Set[Q],
-        val listVars: Set[X],
-        val transitions: Set[Edge],
-        val initialStates: Set[Q],
-        val outputRelation: Set[(Q, ListSpec)],
-    ) extends SimpleStreamingDataStringTransducer[D] {
-      type State   = Q
-      type ListVar = X
+      // ここで states や types などをパラメトリックフィールドにしないと、
+      // StreamingDataStringTransducer の require でコケる (isCopyless とかが使えないから)
+      class SimpleStreamingDataStringTransducerImpl(val types: factory.types.type)(
+          val states: Set[Q],
+          val listVars: Set[X],
+          val transitions: Set[Edge],
+          val initialStates: Set[Q],
+          val outputRelation: Set[(Q, ListSpec)],
+      ) extends SimpleStreamingDataStringTransducer[D] {
+        type State   = Q
+        type ListVar = X
+      }
     }
+  }
+
+  def factory[D, Q, X]: Factory[D, Q, X] = Factory()
+
+  // make set of initial states singleton
+  def canonicalize[D](s: SimpleStreamingDataStringTransducer[D]): SimpleStreamingDataStringTransducer[D] = {
+    if (s.initialStates.size == 1) return s
+    val factory = SimpleStreamingDataStringTransducer.factory[D, Option[s.types.State], s.types.ListVar]
+    import factory.types.{SimpleEdge}
+    factory(
+      states = s.states.map(Option.apply) + None,
+      listVars = s.listVars,
+      transitions = {
+        val fromNone =
+          s.transitions
+            .withFilter(s.initialStates contains s.srcOf(_))
+            .map(e => SimpleEdge(Option.empty, s.updateOf(e), Option(s.dstOf(e))))
+        val wrapped =
+          s.transitions.map(e => SimpleEdge(Option(s.srcOf(e)), s.updateOf(e), Option(s.dstOf(e))))
+        fromNone ++ wrapped
+      },
+      initialStates = Set(None),
+      outputRelation = {
+        val atNone =
+          s.outputRelation
+            .withFilter(s.initialStates contains s.stateOf(_))
+            .map(o => Option.empty -> s.outputSpecOf(o))
+        val wrapped = s.outputRelation
+          .map(o => Option(s.stateOf(o)) -> s.outputSpecOf(o))
+        atNone ++ wrapped
+      }
+    )
   }
 
   def reverse[D]: SimpleStreamingDataStringTransducer[D] = {
@@ -292,6 +334,7 @@ object AtLeastTwo {
 object DataStringTheoryExamples extends App {
   type D = Boolean
   val theory = new DataStringTheory[D]
+  import theory.{checkEquivalenceSimple, checkFunctionalitySimple, composeSimple}
   import SimpleStreamingDataStringTransducer.{
     reverse,
     identity,
@@ -299,39 +342,58 @@ object DataStringTheoryExamples extends App {
     reverseIdentity1,
     reverseIdentity2
   }
-  assert(theory.checkEquivalenceSimple(reverse, reverse))
-  assert(!theory.checkEquivalenceSimple(reverse, identity))
-  assert(theory.checkFunctionalitySimple(duplicate))
-  assert(theory.checkFunctionalitySimple(reverseIdentity1))
-  assert(theory.checkEquivalenceSimple(reverseIdentity1, reverseIdentity2))
-  assert(!theory.checkEquivalenceSimple(duplicate, reverseIdentity1))
+  assert(checkEquivalenceSimple(reverse, reverse))
+  assert(!checkEquivalenceSimple(reverse, identity))
+  assert(checkFunctionalitySimple(duplicate))
+  assert(checkFunctionalitySimple(reverseIdentity1))
+  assert(checkEquivalenceSimple(reverseIdentity1, reverseIdentity2))
+  assert(!checkEquivalenceSimple(duplicate, reverseIdentity1))
+  assert(checkEquivalenceSimple(composeSimple(reverse, reverse), identity))
 }
 
 // checkEquivalenceSimple が健全であるために `AtLeastTwo` が必要。
 class DataStringTheory[D: AtLeastTwo] {
   type SSDT = SimpleStreamingDataStringTransducer[D]
-  // def asSST(t: SSDT): NSST[t.State, Unit, Unit, t.ListVar] = {
-  //   NSST(
-  //     t.states,
-  //     Set(()),
-  //     t.listVars,
-  //     t.transitions.map(e => (t.srcOf(e), (), tr(t.updateOf(e)), t.dstOf(e))),
-  //     t.initialStates,
-  //     t.outputRelation
-  //   )
-  // }
-  // def asSSDT[Q, X](t: NSST[Q, Unit, Unit, X]): SSDT = {
-  //   val builder = SimpleStreamingDataStringTransducer.builder[Q, X]
-  //   import builder.sugar._
-  //   build {
-  //     addStates(t.states) >>
-  //       setInitial(t.q0) >>
-  //       addEdges(t.edges.map { case (p, _, update, q) => (p, trU(update), q) }) >>
-  //       addOutputRelations(t.outGraph.map { case (q, xs) => (q, trS(xs)) }) >>
-  //       addListVars(t.variables)
-  //   }
-  // }
-  // def composeSimple(t1: SSDT, t2: SSDT): SSDT = asSSDT(asSST(t1) compose asSST(t2))
+
+  def asSST(s: SSDT): NSST[_, Unit, Unit, _] = {
+    val t: SSDT = SimpleStreamingDataStringTransducer.canonicalize(s)
+    import t.types._
+    import expresso.math.{Cop, Cop1, Cop2}
+    import expresso.{Cupstar, Update => SstUpdate}
+    def trL(e: ListSpec): Cupstar[ListVar, Unit] = e.toList.map {
+      case ListVar(x)    => Cop1(x)
+      case DataVar(_, _) => Cop2(())
+      case _             => throw new IllegalStateException("this cannot happen")
+    }
+    def trU(u: Update): SstUpdate[ListVar, Unit] = u.listUpdate.map { case (x, w) => x -> trL(w) }
+    NSST[t.State, Unit, Unit, ListVar](
+      t.states,
+      Set(()),
+      t.listVars,
+      t.transitions.map(e => (t.srcOf(e), (), trU(t.updateOf(e)), t.dstOf(e))),
+      t.initialStates.head,
+      expresso.graphToMap(t.outputRelation) { case (q, w) => q -> trL(w) }
+    )
+  }
+  def asSSDT[Q, X](t: NSST[Q, Unit, Unit, X]): SSDT = {
+    val factory = SimpleStreamingDataStringTransducer.factory[D, Q, X]
+    import factory.types._
+    import expresso.math.{Cop1, Cop2}
+    def trU(u: expresso.Update[X, Unit]): Update =
+      SimpleUpdate(u.toSeq.map { case (x, w) => x -> trW(w) }: _*)
+    def trW(w: expresso.Cupstar[X, Unit]): ListSpec = w.map {
+      case Cop1(x) => ListVar(x)
+      case Cop2(_) => DataVar(otag, curr)
+    }
+    factory(
+      t.states,
+      t.variables,
+      t.edges.map { case (p, _, update, q) => SimpleEdge(p, trU(update), q) },
+      Set(t.q0),
+      (for ((q, w) <- t.outGraph) yield (q -> trW(w))).toSet
+    )
+  }
+  def composeSimple(t1: SSDT, t2: SSDT): SSDT    = asSSDT(asSST(t1) compose asSST(t2))
   def checkFunctionalitySimple(t: SSDT): Boolean = checkEquivalenceSimple(t, t)
   def checkEquivalenceSimple(t1: SSDT, t2: SSDT): Boolean = {
     import expresso.math.Presburger.Sugar._
