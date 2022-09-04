@@ -162,6 +162,8 @@ object SimpleStreamingDataStringTransducer { outer =>
     )
   }
 
+  // exmaples
+
   def reverse[D]: SimpleStreamingDataStringTransducer[D] = {
     case object q // for state
     case object x // for list variable
@@ -243,6 +245,27 @@ object SimpleStreamingDataStringTransducer { outer =>
       outputRelation = Set(q -> ListSpec(ListVar(x), ListVar(y)))
     )
   }
+
+  def reverseIdentity3[D]: SimpleStreamingDataStringTransducer[D] = {
+    case object q
+    object ListVarEnum extends Enumeration { val x, y, z = Value }
+    import ListVarEnum.{x, y, z, Value => X}
+    val factory = SimpleStreamingDataStringTransducer.factory[D, q.type, X]
+    import factory.types._
+    factory(
+      states = Set(q),
+      listVars = Set(x, y, z),
+      transitions = {
+        def id(z: X)  = z -> ListSpec(ListVar(z), SimpleDataVar(curr))
+        def rev(z: X) = z -> ListSpec(SimpleDataVar(curr), ListVar(z))
+        Set(SimpleEdge(q, SimpleUpdate(rev(x), id(y), id(z)), q))
+      },
+      initialStates = Set(q),
+      outputRelation = Set(q -> ListSpec(ListVar(x), ListVar(y)))
+    )
+  }
+
+  private def singleStateConstructionScheme[D](): SimpleStreamingDataStringTransducer[D] = ???
 }
 
 trait DatastringTypes[O, X, V] {
@@ -340,15 +363,18 @@ object DataStringTheoryExamples extends App {
     identity,
     duplicate,
     reverseIdentity1,
-    reverseIdentity2
+    reverseIdentity2,
+    reverseIdentity3,
   }
   assert(checkEquivalenceSimple(reverse, reverse))
   assert(!checkEquivalenceSimple(reverse, identity))
   assert(checkFunctionalitySimple(duplicate))
   assert(checkFunctionalitySimple(reverseIdentity1))
   assert(checkEquivalenceSimple(reverseIdentity1, reverseIdentity2))
+  assert(checkEquivalenceSimple(reverseIdentity1, reverseIdentity3))
   assert(!checkEquivalenceSimple(duplicate, reverseIdentity1))
   assert(checkEquivalenceSimple(composeSimple(reverse, reverse), identity))
+  println("examples done")
 }
 
 // checkEquivalenceSimple が健全であるために `AtLeastTwo` が必要。
@@ -403,7 +429,8 @@ class DataStringTheory[D: AtLeastTwo] {
     def differByDomain: Boolean = false // TODO: 実装するか、全域性を要求する
     def differByLength: Boolean = {
       val toParikhAutomaton = parikhAutomatonConstructionScheme(endOfOutput) _
-      def p                 = toParikhAutomaton(t1, "j1", "p1") intersect toParikhAutomaton(t2, "j2", "p2")
+      // TODO: Parikh 拡張を入れる場合、ji, pi は toParikhAutomaton が自動生成して返す
+      def p = toParikhAutomaton(t1, "j1", "p1") intersect toParikhAutomaton(t2, "j2", "p2")
       p.addFormula(Var("p1") !== Var("p2")).internal.ilVectorOption.nonEmpty
     }
     def differAtSomePosition: Boolean = {
