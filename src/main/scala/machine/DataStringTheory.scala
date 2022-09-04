@@ -445,7 +445,7 @@ class DataStringTheory[D: AtLeastTwo] {
       val labels    = Set(lj, lp)
       val intParams = Set(j, p)
       val formula   = Label(lj) === I(j) && Label(lp) === I(p)
-      val isInitial = (q: t.State, _: Guess) => t.initialStates(q)
+      val isInitial = (q: t.State, f: Guess) => t.initialStates(q) && !f.pGuessed
       lazy val finals: Set[(t.State, Guess)] = t.outputRelation flatMap { case (state, outputSpec) =>
         val x      = t.listVars.head
         val xs     = t.listVars - x
