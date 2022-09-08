@@ -188,8 +188,7 @@ object DataStringTheory2 {
   def checkEquivalence(t1: SSDT, t2: SSDT): Boolean = {
     import expresso.math.Presburger.Sugar._
 
-    // def notEquiv = differByDomain || differByLength || differAtSomePosition
-    def notEquiv = differAtSomePosition
+    def notEquiv = differByDomain || differByLength || differAtSomePosition
 
     def differByDomain: Boolean = false // TODO: 実装するか、全域性を要求する
     def differByLength: Boolean = {
