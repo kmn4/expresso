@@ -230,9 +230,8 @@ object SimpleStreamingDataStringTransducer2 {
   def sliceConstB(
       begin: Int,
       end: String
-  ): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = {
-    // TODO: begin として新しいものを生成する
-    val b        = "_begin"
+  )(implicit gen: StringGenerator): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = {
+    val b        = gen()
     val t        = slice(b, end)
     val formulae = t.internalSST.acceptFormulas
     val newFormula = {
@@ -242,12 +241,15 @@ object SimpleStreamingDataStringTransducer2 {
     SimpleStreamingDataStringTransducer2(t.internalSST.copy(acceptFormulas = formulae :+ newFormula))
   }
 
-  def prefix(end: String): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } =
+  def prefix(end: String)(implicit
+      gen: StringGenerator
+  ): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } =
     sliceConstB(0, end)
 
-  def suffix(begin: String): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = {
-    // TODO: end として新しいものを生成する
-    val end      = "_end"
+  def suffix(
+      begin: String
+  )(implicit gen: StringGenerator): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = {
+    val end      = gen()
     val t        = slice(begin, end)
     val formulae = t.internalSST.acceptFormulas
     val newFormula = {
@@ -302,7 +304,8 @@ object SimpleStreamingDataStringTransducer2 {
   // F'(..) = xin xout, xout = X.head
   // q in dom(F), (operand, q) -[#/xout := F(q)]-> (operand+1, q0)
 
-  import DataStringTheory2.SSDT
+  type SSDT = SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int }
+  val SSDT = SimpleStreamingDataStringTransducer2
 
   def liftDelim(
       t: SSDT,
@@ -432,9 +435,6 @@ object SimpleStreamingDataStringTransducer2 {
       )
     )
   }
-
-  def composeLeft(transducers: SSDT*): SSDT =
-    transducers.reduceLeft(DataStringTheory2.compose)
 }
 
 object DataStringTransducerExamples extends App {
@@ -503,10 +503,11 @@ object DataStringTransducerExamples extends App {
     val result = outputCandidates.filter { case (_, image) =>
       import expresso.math.Presburger
       val formulae = t.acceptFormulae
-        // この map により formulae に自由変数は残らない
+        // formulae には、値が与えられなかった仮引数が自由変数として残る場合がある
         .map(Presburger.Formula.substitute(_) {
-          case Left(param)  => Presburger.Const(args(param))
-          case Right(label) => Presburger.Const(image(label))
+          case Left(param) if args.isDefinedAt(param) => Presburger.Const(args(param))
+          case Left(param)                            => Presburger.Var(Left(param))
+          case Right(label)                           => Presburger.Const(image(label))
         })
       expresso.withZ3Context { ctx =>
         import com.microsoft.z3
@@ -546,17 +547,13 @@ object DataStringTransducerExamples extends App {
   assert(sliceOf123(-1, -1) == seq())
   assert(sliceOf123(3, 2) == seq())
   // comp
-  import SimpleStreamingDataStringTransducer2.{
-    prefix,
-    suffix,
-    liftDelim,
-    composeLeft,
-    concatDelim,
-    projection
-  }
-  val i    = "i"
-  val pref = prefix(i)
-  val suff = suffix(i)
+  import SimpleStreamingDataStringTransducer2.{prefix, suffix, liftDelim, concatDelim, projection}
+  val i            = "i"
+  implicit val gen = new StringGenerator(Set("i", "b", "e"))
+  val pref         = prefix(i)
+  val suff         = suffix(i)
+  val theory       = new DataStringTheory2
+  import theory.composeLeft
   val comp = {
     composeLeft(
       // w0# => w0#w0[0:i]#
@@ -572,8 +569,7 @@ object DataStringTransducerExamples extends App {
   val concat = concatDelim(numReadStrings = 3, operands = Seq(1, 2))
   val projId = projection(numReadStrings = 1, operands = Seq(0))
   assert(transduce(concat, Map(), seq(1, :#, 2, :#, 3, :#)) == seq(1, :#, 2, :#, 3, :#, 2, 3, :#))
-  // TODO: _begin や _end を自動生成するようにしたら、適切に置き換える
-  assert(transduce(comp, Map(i -> -2, "_begin" -> 0, "_end" -> 3), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
+  assert(transduce(comp, Map(i -> -2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
   assert(transduce(projId, Map(), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
   val delimRevRev = composeLeft(
     liftDelim(reverse, numReadStrings = 1, operand = 0),
@@ -592,7 +588,7 @@ object DataStringTransducerExamples extends App {
     reverseIdentity2,
     reverseIdentity3,
   }
-  import DataStringTheory2.{checkEquivalence, checkFunctionality, compose}
+  import theory.{checkEquivalence, checkFunctionality, compose}
   assert(checkEquivalence(reverse, reverse))
   assert(!checkEquivalence(reverse, identity))
   assert(checkFunctionality(duplicate))
@@ -618,11 +614,26 @@ object DataStringTransducerExamples extends App {
   println("equivalence checking examples done")
 }
 
-object DataStringTheory2 {
+class StringGenerator(private var forbidden: Set[String]) {
+  private def randomString(): String = {
+    import scala.util.Random
+    val len = Random.between(3, 7)
+    s"rand_${List.fill(len)(Random.nextPrintableChar())}"
+  }
+  def apply(): String = {
+    val res = LazyList.from(0).map(_ => randomString()).find(!forbidden(_)).get
+    forbidden += res
+    res
+  }
+}
+
+class DataStringTheory2(implicit gen: StringGenerator) {
   type SSDT = SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int }
   val SSDT = SimpleStreamingDataStringTransducer2
   def compose(t1: SSDT, t2: SSDT): SSDT =
     SSDT(t1.internalSST compose t2.internalSST)
+  def composeLeft(transducers: SSDT*): SSDT =
+    transducers.reduceLeft(compose)
   def checkFunctionality(t: SSDT): Boolean = checkEquivalence(t, t)
   def checkEquivalence(t1: SSDT, t2: SSDT): Boolean = {
     // require(t1.isTotal && t2.isTotal) だが、全域性は決定不能
@@ -633,20 +644,22 @@ object DataStringTheory2 {
 
     def differByLength: Boolean = {
       val toParikhAutomaton = parikhAutomatonConstructionScheme(endOfOutput) _
-      // TODO: Parikh 拡張を入れる場合、ji, pi は toParikhAutomaton が自動生成して返す
-      def p = toParikhAutomaton(t1, "j1", "p1", "_1") intersect toParikhAutomaton(t2, "j2", "p2", "_2")
-      p.addFormula(Var("p1") !== Var("p2")).internal.ilVectorOption.nonEmpty
+      val (pa1, _, p1, _)   = toParikhAutomaton(t1)
+      val (pa2, _, p2, _)   = toParikhAutomaton(t2)
+      val p                 = pa1 intersect pa2
+      p.addFormula(Var(p1) !== Var(p2)).internal.ilVectorOption.nonEmpty
     }
     def differAtSomePosition: Boolean = {
       // 結果の PA が w を受理するなら、t に w を与えるとその j 文字目が出力の "p" 文字目に現れる
-      val toParikhAutomaton = parikhAutomatonConstructionScheme(someInternalPosition) _
-      def p =
-        toParikhAutomaton(t1, "j1", "p1", "isDelim1") intersect toParikhAutomaton(t2, "j2", "p2", "isDelim2")
+      val toParikhAutomaton       = parikhAutomatonConstructionScheme(someInternalPosition) _
+      val (pa1, j1, p1, isDelim1) = toParikhAutomaton(t1)
+      val (pa2, j2, p2, isDelim2) = toParikhAutomaton(t2)
+      val p                       = pa1 intersect pa2
       p.addFormula(
         // p1 == p2 && (isDelim1 != isDelim2 || (isDelim == 0 && j1 != j2))
-        (Var("p1") === Var("p2")) &&
-          ((Var("isDelim1") !== Var("isDelim2")) ||
-            ((Var("isDelim1") === 0) && (Var("j1") !== Var("j2"))))
+        (Var(p1) === Var(p2)) &&
+          ((Var(isDelim1) !== Var(isDelim2)) ||
+            ((Var(isDelim1) === 0) && (Var(j1) !== Var(j2))))
       ).internal
         .ilVectorOption
         .nonEmpty
@@ -654,14 +667,15 @@ object DataStringTheory2 {
     sealed trait Position
     case object someInternalPosition extends Position
     case object endOfOutput          extends Position
-    // 結果の Parikh オートマトンが w を受理するとする。
+    // 結果を (pa, j, p, isDelim) とする。
+    // pa が w を受理するとする。
     // また、t に w を入力として与えたときの出力を w' とする。
     // isDelim == 1 のとき、w' の位置 p は区切り文字である。
     // そうでないとき、w' の位置 p は w の j 文字目である。
     // ただし、出力の終端も「文字」であると考える；w' の位置 w'.length は、w の w.length 文字目である。
     def parikhAutomatonConstructionScheme(
         pPointsTo: Position
-    )(t: SSDT, j: String, p: String, isDelim: String): SimplePA2[String] = {
+    )(t: SSDT): (SimplePA2[String], String, String, String) = {
       val types = new DatastringTypes2[t.ListVar] {}
       import types._
 
@@ -676,6 +690,9 @@ object DataStringTheory2 {
         val pGuessed: Boolean = pPointsTo == someInternalPosition && self.exists(_._2 == center)
       }
       val Guess = Map
+
+      // generate parameters
+      val j, p, isDelim = gen()
 
       type Label = t.ParikhLabel
       val lj                                          = t.internalSST.ls.maxOption.getOrElse(0) + 1
@@ -772,7 +789,7 @@ object DataStringTheory2 {
           } yield hd +: ys
         }
 
-      SimplePA2.from(
+      val pa = SimplePA2.from(
         SimplePA2.ExtendedSyntax[(t.State, Guess), Label, String](
           states = states,
           labels = labels ++ t.internalSST.ls,
@@ -786,6 +803,7 @@ object DataStringTheory2 {
           acceptFormulae = Seq(formula) ++ t.internalSST.acceptFormulas
         )
       )
+      (pa, j, p, isDelim)
     }
 
     !notEquiv
