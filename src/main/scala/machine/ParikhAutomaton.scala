@@ -21,12 +21,12 @@ case class ParikhAutomaton[Q, A, L, I](
 
   lazy val sizes = (states.size, edges.size)
 
-  val trans = graphToMap(edges) { case (q, a, v, r)         => (q, a) -> (r, v) }
+  val trans      = graphToMap(edges) { case (q, a, v, r) => (q, a) -> (r, v) }
   val acceptFunc = graphToMap(acceptRelation) { case (q, v) => q -> v }
 
   lazy val acceptF = graphToMap(acceptRelation)(identity)
 
-  lazy val psst = toParikhSST
+  lazy val psst                                   = toParikhSST
   def accept(iv: Map[I, Int])(s: Seq[A]): Boolean = psst.transduce(s, iv).nonEmpty
 
   def intersect[R, K](that: ParikhAutomaton[R, A, K, I]): ParikhAutomaton[(Q, R), A, Cop[L, K], I] = {
@@ -50,8 +50,8 @@ case class ParikhAutomaton[Q, A, L, I](
     )
     val newAccRel = for {
       (q, r) <- newStates
-      v <- acceptFunc(q)
-      u <- that.acceptFunc(r)
+      v      <- acceptFunc(q)
+      u      <- that.acceptFunc(r)
     } yield ((q, r), vecCoproduct(v, u))
     val newFormulas: FS = {
       val thisFs: FS = acceptFormulas.map(_.renameVars(_.map(Cop1.apply)))
@@ -70,13 +70,15 @@ case class ParikhAutomaton[Q, A, L, I](
     )
   }
 
-  /** Returns a pair (n, v) of I vector and L vector that meets the following if exists:
-    * there exists w for which this outputs v and formula(n, v) == true. */
+  /** Returns a pair (n, v) of I vector and L vector that meets the following if exists: there exists w for
+    * which this outputs v and formula(n, v) == true.
+    */
   def ilVectorOption: Option[(Map[I, Int], Map[L, Int])] = toParikhSST.ilVectorOption
 
   def renamed: ParikhAutomaton[Int, A, Int, I] = {
     val qMap = states.zipWithIndex.toMap
-    val lMap = ls.zipWithIndex.toMap
+    // 束縛変数の付け替えをするには、ls.zipWithIndex.toMap では足りない
+    val lMap = new com.github.kmn4.expresso.math.Renamer[L]
     ParikhAutomaton(
       states.map(qMap),
       inSet,
@@ -90,7 +92,7 @@ case class ParikhAutomaton[Q, A, L, I](
   }
 
   def toIdentityParikhSST: ParikhSST[Q, A, A, Unit, L, I] = {
-    val x = List[Cop[Unit, A]](Cop1(()))
+    val x      = List[Cop[Unit, A]](Cop1(()))
     val update = inSet.map(a => a -> Map(() -> List(Cop1(()), Cop2(a)))).toMap
     ParikhSST(
       states,
