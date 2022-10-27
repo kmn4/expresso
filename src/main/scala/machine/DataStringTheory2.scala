@@ -1,6 +1,7 @@
 package com.github.kmn4.expresso.machine
 
 import com.github.kmn4.expresso
+import com.github.kmn4.expresso.math.Presburger
 import com.github.kmn4.expresso.math.Presburger.{Var, Formula => PresFormula}
 import com.github.kmn4.expresso.math.{Cop1, Cop2, Cop}
 
@@ -156,6 +157,33 @@ object SimpleStreamingDataStringTransducer2 {
 
   import CurrOrDelim._
 
+  private class PresSugar[X] {
+    import Presburger._
+    type Var     = Presburger.Var[X]
+    type Term    = Presburger.Term[X]
+    type Formula = Presburger.Formula[X]
+    implicit def const(i: Int): Term = Const(i)
+    implicit class TermOps(t: Term) {
+      def +(s: Term): Term      = Add(Seq(t, s))
+      def -(s: Term): Term      = Sub(t, s)
+      def *(i: Int): Term       = Mult(Const(i), t)
+      def ===(s: Term): Formula = Eq(t, s)
+      def <(s: Term): Formula   = Lt(t, s)
+      def <=(s: Term): Formula  = Le(t, s)
+      def >(s: Term): Formula   = Gt(t, s)
+      def >=(s: Term): Formula  = Ge(t, s)
+      def !==(s: Term): Formula = !(t === s)
+    }
+    implicit class FormulaOps(f: Formula) {
+      def unary_! : Formula        = Not(f)
+      def &&(g: Formula): Formula  = Conj(Seq(f, g))
+      def ||(g: Formula): Formula  = Disj(Seq(f, g))
+      def ==>(g: Formula): Formula = Implies(f, g)
+    }
+  }
+
+  private class PresburgerFormulaSugarForParikhAutomaton[I, L] extends PresSugar[Either[I, L]]
+
   def slice(begin: String, end: String): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = {
     val states @ Seq(seeking, taking, ignoring) = Seq(0, 1, 2)
     val listVar                                 = 0
@@ -182,20 +210,16 @@ object SimpleStreamingDataStringTransducer2 {
       (edges, outGraph)
     }
     val formula = {
-      import com.github.kmn4.expresso.math.Presburger
-      import com.github.kmn4.expresso.math.Presburger.Sugar._
-      type VarRepr = Either[String, Int]
-      type Var     = Presburger.Var[VarRepr]
-      type Term    = Presburger.Term[VarRepr]
-      type Formula = Presburger.Formula[VarRepr]
+      val sugar = new PresburgerFormulaSugarForParikhAutomaton[String, Int]
+      import sugar._
+      def equalityITE(lhs: Term)(cond: Formula, `then`: Term, `else`: Term): Formula =
+        (cond && (lhs === `then`)) || (!cond && (lhs === `else`))
       val Seq(b0, e0): Seq[Term] = Seq(Var(Left(begin)), Var(Left(end)))
-      val boundVars @ Seq(b1, b2, b3, b4, e1, e2, e3, e4): Seq[Var] = {
+      val boundVars @ Seq(b1, b2, b3, b4, e1, e2, e3, e4): Seq[sugar.Var] = {
         val max = labels.max + 1
         Seq.tabulate(8)(i => Var(Right(max + i)))
       }
-      val Seq(sek, tak, inp): Seq[Var] = labels.map(label => Var(Right(label)))
-      def equalityITE(lhs: Term)(cond: Formula, `then`: Term, `else`: Term): Formula =
-        (cond && (lhs === `then`)) || (!cond && (lhs === `else`))
+      val Seq(sek, tak, inp): Seq[sugar.Var] = labels.map(label => Var(Right(label)))
       val first: Formula =
         // b1 == if begin < 0 then begin + input else begin
         equalityITE(b1)(b0 < const(0), b0 + inp, b0) &&
@@ -258,6 +282,65 @@ object SimpleStreamingDataStringTransducer2 {
     }
     SimpleStreamingDataStringTransducer2(t.internalSST.copy(acceptFormulas = formulae :+ newFormula))
   }
+
+  // 特殊化されたバージョン
+
+  private def takeDropImpl(num: String, isTake: Boolean)(implicit
+      gen: StringGenerator
+  ): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = {
+    val states @ Seq(init, fin)    = Seq(0, 1)
+    val listVar                    = 0
+    val labels @ Seq(count, state) = Seq(0, 1)
+    val (edges, outGraph) = {
+      import expresso.math.{Cop, Cop1, Cop2}
+      type Update = Map[Int, List[Cop[Int, CurrOrDelim]]]
+      val id: Update  = Map(listVar -> List(Cop1(listVar)))
+      val add: Update = Map(listVar -> List(Cop1(listVar), Cop2(curr)))
+      def vec(ct: Int, st: Int): Map[Int, Int] =
+        Map(count -> ct, state -> st)
+      val edges = Set(
+        // to `init`
+        (init, if (isTake) add else id, vec(1, 0), init),
+        // to `fin`
+        (init, if (isTake) id else add, vec(0, 0), fin),
+        (fin, if (isTake) id else add, vec(0, 0), fin),
+      ).map { case (p, u, v, q) => (p, curr: CurrOrDelim, u, v, q) }
+      val outGraph = states.map(p => (p, id(listVar), vec(0, p))).toSet
+      (edges, outGraph)
+    }
+    val formula = {
+      val sugar = new PresburgerFormulaSugarForParikhAutomaton[String, Int]
+      import sugar._
+      val n: sugar.Var                  = Var(Left(num))
+      val Seq(cnt, stt): Seq[sugar.Var] = labels.map(label => Var(Right(label)))
+      val first                         = n - cnt === const(0)                      // 途中で整数引数が境界値に至った
+      val second                        = n <= const(0) && cnt === const(0)         // 整数引数が初めから小さかった
+      val third                         = n - cnt > const(0) && stt === const(init) // 整数引数が最後まで大きかった
+      first || second || third
+    }
+    val internal = ParikhSST[Int, CurrOrDelim, CurrOrDelim, Int, Int, String](
+      states = states.toSet,
+      inSet = Set(curr),
+      xs = Set(listVar),
+      ls = labels.toSet,
+      is = Set(num),
+      edges = edges,
+      q0 = init,
+      outGraph = outGraph,
+      acceptFormulas = Seq(formula)
+    )
+    SimpleStreamingDataStringTransducer2(internal)
+  }
+
+  // 先頭の `num` 個を取ってくる。負数なら1つも取らない。入力サイズより大きければ全体。
+  def take(num: String)(implicit
+      gen: StringGenerator
+  ): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = takeDropImpl(num, isTake = true)
+
+  // 先頭の `num` 個を無視する。負数なら全体を取る。入力サイズより大きければ空列。
+  def drop(num: String)(implicit
+      gen: StringGenerator
+  ): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = takeDropImpl(num, isTake = false)
 
   // DataStringTheory で定義したものから変換
   def from1[D](
@@ -547,7 +630,7 @@ object DataStringTransducerExamples extends App {
   assert(sliceOf123(-1, -1) == seq())
   assert(sliceOf123(3, 2) == seq())
   // comp
-  import SimpleStreamingDataStringTransducer2.{prefix, suffix, liftDelim, concatDelim, projection}
+  import SimpleStreamingDataStringTransducer2.{prefix, suffix, liftDelim, concatDelim, projection, take, drop}
   val i            = "i"
   implicit val gen = new StringGenerator(Set("i", "b", "e"))
   val pref         = prefix(i)
@@ -566,10 +649,36 @@ object DataStringTransducerExamples extends App {
       projection(numReadStrings = 4, operands = Seq(3))
     )
   }
+  // takeDrop (特殊化された take, drop を使う)
+  val tak = take(i)
+  val drp = drop(i)
+  val takeDrop = {
+    // comp のコピペを改変
+    composeLeft(
+      // w0# => w0#w0[0:i]#
+      liftDelim(tak, numReadStrings = 1, operand = 0),
+      // w0#w1# => w0#w1#w0[i:len(w)]#
+      liftDelim(drp, numReadStrings = 2, operand = 0),
+      // w0#w1#w2# => w0#w1#w2#w1w2#
+      concatDelim(numReadStrings = 3, operands = Seq(1, 2)),
+      // w0#w1#w2#w3# => w3#
+      projection(numReadStrings = 4, operands = Seq(3))
+    )
+  }
+  // comp の定義で使うものも一応テストする
   val concat = concatDelim(numReadStrings = 3, operands = Seq(1, 2))
   val projId = projection(numReadStrings = 1, operands = Seq(0))
+  // セマンティクステストの assert たち
+  assert(transduce(tak, Map(i -> 2), seq(1, 2, 3)) == seq(1, 2))
+  assert(transduce(tak, Map(i -> -2), seq(1, 2, 3)) == seq())
+  assert(transduce(tak, Map(i -> 5), seq(1, 2, 3)) == seq(1, 2, 3))
   assert(transduce(concat, Map(), seq(1, :#, 2, :#, 3, :#)) == seq(1, :#, 2, :#, 3, :#, 2, 3, :#))
   assert(transduce(comp, Map(i -> -2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
+  assert(transduce(comp, Map(i -> 2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
+  assert(transduce(comp, Map(i -> 5), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
+  assert(transduce(takeDrop, Map(i -> -2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
+  assert(transduce(takeDrop, Map(i -> 2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
+  assert(transduce(takeDrop, Map(i -> 5), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
   assert(transduce(projId, Map(), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
   val delimRevRev = composeLeft(
     liftDelim(reverse, numReadStrings = 1, operand = 0),
@@ -609,8 +718,19 @@ object DataStringTransducerExamples extends App {
   assert(checkEquivalence(delimRevRev, delimId))
   // NOTE: comp の functionality 判定は Z3 による充足可能性判定が終わらない。
   // 構成される Parikh オートマトンは 1000 状態 20000 遷移程度
+  def printTime(): Unit            = println(new java.util.Date(System.currentTimeMillis()))
+  def printTime(msg: String): Unit = println(s"${new java.util.Date(System.currentTimeMillis())}: $msg")
   // assert(checkFunctionality(comp))
   assert(checkEquivalence(delimId, comp))
+  // 特殊化された take, drop を使う例
+  printTime("tak =equiv? drp")
+  assert(!checkEquivalence(tak, drp))
+  printTime("tak =equiv? identity")
+  assert(!checkEquivalence(tak, identity))
+  printTime("func? takeDrop")
+  assert(checkFunctionality(takeDrop)) // この場合は 2:30 程度で決定できる
+  printTime("delimID =equiv? takeDrop")
+  assert(checkEquivalence(delimId, takeDrop))
   println("equivalence checking examples done")
 }
 
