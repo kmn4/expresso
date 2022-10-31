@@ -631,11 +631,11 @@ object DataStringTransducerExamples extends App {
   assert(sliceOf123(3, 2) == seq())
   // comp
   import SimpleStreamingDataStringTransducer2.{prefix, suffix, liftDelim, concatDelim, projection, take, drop}
-  val i            = "i"
-  implicit val gen = new StringGenerator(Set("i", "b", "e"))
-  val pref         = prefix(i)
-  val suff         = suffix(i)
-  val theory       = new DataStringTheory2
+  val i                    = "i"
+  private implicit val gen = new StringGenerator(Set("i", "b", "e"))
+  val pref                 = prefix(i)
+  val suff                 = suffix(i)
+  val theory               = new DataStringTheory2
   import theory.composeLeft
   val comp = {
     composeLeft(
@@ -734,7 +734,7 @@ object DataStringTransducerExamples extends App {
   println("equivalence checking examples done")
 }
 
-class StringGenerator(private var forbidden: Set[String]) {
+private class StringGenerator(private var forbidden: Set[String]) {
   private def randomString(): String = {
     import scala.util.Random
     val len = Random.between(3, 7)
@@ -931,7 +931,7 @@ class DataStringTheory2(implicit gen: StringGenerator) {
 
 }
 
-abstract class SimplePA2[I] { outer =>
+private abstract class SimplePA2[I] { outer =>
   type State
   type Label
   val internal: ParikhAutomaton[State, CurrOrDelim, Label, I]
@@ -951,7 +951,7 @@ abstract class SimplePA2[I] { outer =>
   }
 }
 
-object SimplePA2 {
+private object SimplePA2 {
 
   // 拡張したのは、今のところ初期状態が複数ありうるということだけ
   case class ExtendedSyntax[Q, L, I](
