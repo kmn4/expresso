@@ -5,11 +5,7 @@ import com.github.kmn4.expresso.math.Presburger
 import com.github.kmn4.expresso.math.Presburger.{Var, Formula => PresFormula}
 import com.github.kmn4.expresso.math.{Cop1, Cop2, Cop}
 
-sealed trait CurrOrDelim extends Product with Serializable
-object CurrOrDelim {
-  case object curr  extends CurrOrDelim
-  case object delim extends CurrOrDelim
-}
+enum CurrOrDelim { case curr, delim }
 
 trait DatastringTypes2[X] {
   type ListVar   = X
@@ -214,12 +210,12 @@ object SimpleStreamingDataStringTransducer2 {
       import sugar._
       def equalityITE(lhs: Term)(cond: Formula, `then`: Term, `else`: Term): Formula =
         (cond && (lhs === `then`)) || (!cond && (lhs === `else`))
-      val Seq(b0, e0): Seq[Term] = Seq(Var(Left(begin)), Var(Left(end)))
+      val Seq(b0, e0): Seq[Term] = Seq[Term](Var(Left(begin)), Var(Left(end)))
       val boundVars @ Seq(b1, b2, b3, b4, e1, e2, e3, e4): Seq[sugar.Var] = {
         val max = labels.max + 1
-        Seq.tabulate(8)(i => Var(Right(max + i)))
+        Seq.tabulate[sugar.Var](8)(i => Var(Right(max + i)))
       }
-      val Seq(sek, tak, inp): Seq[sugar.Var] = labels.map(label => Var(Right(label)))
+      val Seq(sek, tak, inp): Seq[sugar.Var] = labels.map[sugar.Var](label => Var(Right(label)))
       val first: Formula =
         // b1 == if begin < 0 then begin + input else begin
         equalityITE(b1)(b0 < const(0), b0 + inp, b0) &&
@@ -312,7 +308,7 @@ object SimpleStreamingDataStringTransducer2 {
       val sugar = new PresburgerFormulaSugarForParikhAutomaton[String, Int]
       import sugar._
       val n: sugar.Var                  = Var(Left(num))
-      val Seq(cnt, stt): Seq[sugar.Var] = labels.map(label => Var(Right(label)))
+      val Seq(cnt, stt): Seq[sugar.Var] = labels.map[sugar.Var](label => Var(Right(label)))
       val first                         = n - cnt === const(0)                      // 途中で整数引数が境界値に至った
       val second                        = n <= const(0) && cnt === const(0)         // 整数引数が初めから小さかった
       val third                         = n - cnt > const(0) && stt === const(init) // 整数引数が最後まで大きかった
@@ -570,11 +566,11 @@ object DataStringTransducerExamples extends App {
         dataOrDelim match {
           case Left(data) =>
             for {
-              (src, `curr`, update, newImage, dst) <- t.transitions if src == state
+              case (src, `curr`, update, newImage, dst) <- t.transitions if src == state
             } yield (dst, updateEnv(update, listEnv, data = Some(data)), vecAdd(image, newImage))
           case Right(`delim`) =>
             for {
-              (src, `delim`, update, newImage, dst) <- t.transitions if src == state
+              case (src, `delim`, update, newImage, dst) <- t.transitions if src == state
             } yield (dst, updateEnv(update, listEnv), vecAdd(image, newImage))
         }
       }
@@ -631,11 +627,12 @@ object DataStringTransducerExamples extends App {
   assert(sliceOf123(3, 2) == seq())
   // comp
   import SimpleStreamingDataStringTransducer2.{prefix, suffix, liftDelim, concatDelim, projection, take, drop}
-  val i                    = "i"
-  private implicit val gen = new StringGenerator(Set("i", "b", "e"))
-  val pref                 = prefix(i)
-  val suff                 = suffix(i)
-  val theory               = new DataStringTheory2
+  val i = "i"
+  private implicit val gen: StringGenerator =
+    new StringGenerator(Set("i", "b", "e"))
+  val pref   = prefix(i)
+  val suff   = suffix(i)
+  val theory = new DataStringTheory2
   import theory.composeLeft
   val comp = {
     composeLeft(
@@ -728,7 +725,7 @@ object DataStringTransducerExamples extends App {
   printTime("tak =equiv? identity")
   assert(!checkEquivalence(tak, identity))
   printTime("func? takeDrop")
-  assert(checkFunctionality(takeDrop)) // この場合は 2:30 程度で決定できる
+  assert(checkFunctionality(takeDrop)) // この場合は 4 分程度で決定できる
   printTime("delimID =equiv? takeDrop")
   assert(checkEquivalence(delimId, takeDrop))
   println("equivalence checking examples done")
@@ -882,7 +879,7 @@ class DataStringTheory2(implicit gen: StringGenerator) {
             case `center` =>
               val w = update(x)
               (0 until w.length) map { i =>
-                val (w1, z +: w2) = w.splitAt(i)
+                val (w1, z +: w2) = w.splitAt(i): @unchecked
                 z match {
                   case ListVar(z) =>
                     w1.listVariables.map(_ -> left) ++

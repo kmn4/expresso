@@ -348,7 +348,7 @@ trait AtLeastTwo[D] {
 }
 
 object AtLeastTwo {
-  implicit val booleanAL2 = new AtLeastTwo[Boolean] {
+  implicit val booleanAL2: AtLeastTwo[Boolean] = new AtLeastTwo[Boolean] {
     def one: Boolean = true
     def two: Boolean = false
   }
@@ -522,7 +522,7 @@ class DataStringTheory[D: AtLeastTwo] {
             case `center` =>
               val w = update(x)
               (0 until w.length) map { i =>
-                val (w1, z +: w2) = w.splitAt(i)
+                val (w1, z +: w2) = w.splitAt(i): @unchecked
                 z match {
                   case ListVar(z) =>
                     w1.listVariables.map(_ -> left) ++
