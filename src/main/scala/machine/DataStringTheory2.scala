@@ -990,3 +990,153 @@ private object SimplePA2 {
   }
 
 }
+
+object InputFormat {
+
+  enum ParamType { case Acc, Int, Inp }
+
+  case object NilVal
+  type NilVal = NilVal.type
+
+  enum ListPattern {
+    case Nil
+    case Cons(head: String, tail: String)
+  }
+
+  sealed abstract class Comparator
+  case object Equal extends Comparator
+  enum Inequal      extends Comparator { case Le, Lt, Ge, Gt }
+  case class GuardClause(name: String, comparator: Inequal, threshold: Int)
+  case class Guard(conjuncts: Seq[GuardClause]) {
+    /// TODO: assert
+    // 各 name につき conjusts は１つ
+  }
+
+  // NOTE: ArgExp の String は整数パラメタかもしれない
+  type ArgExp = Append | NilVal | Increment | String
+  case class Append(names: String*)
+  type Increment = (Sign, String, Int)
+  enum Sign { case Minus, Plus }
+  final case class FunCall(name: String, args: Seq[ArgExp])
+
+  case class AuxFnClause(
+      name: String,
+      params: Seq[String | ListPattern],
+      // NOTE: body の String はリスト変数
+      body: Seq[(Guard, Append | NilVal | String | FunCall)]
+  )
+
+  def NoGuard: Append | NilVal | String | FunCall => Seq[(Guard, Append | NilVal | String | FunCall)] =
+    x => List((Guard(Nil), x))
+
+  sealed abstract class ProgramStatement
+  final case class Assignment(lhs: String, rhs: FunCall) extends ProgramStatement
+
+  final case class Assumption(comparator: Comparator, lhs: Assumption.Exp, rhs: Assumption.Exp)
+  object Assumption {
+    sealed abstract class Exp
+    final case class Const(n: Int)                    extends Exp
+    case object Length                                extends Exp
+    final case class Mod(divident: Exp, divisor: Exp) extends Exp // NOTE: divisor must be Const to be linear
+    final case class Add(e1: Exp, e2: Exp)            extends Exp
+    final case class Mul(e1: Exp, e2: Exp)            extends Exp // NOTE: args must be Const to be linear
+    final case class Minus(e: Exp)                    extends Exp
+  }
+
+  /// Top-level forms
+
+  case class DefineOpration(
+      signature: (String, Seq[String]),
+      definition: (String, Seq[String | NilVal]),
+      auxFnArgs: Seq[ParamType],
+      auxFnClauses: Seq[AuxFnClause]
+  )
+
+  case class DefineProgram(
+      name: String,
+      intParams: Seq[String],
+      inputList: String,
+      intermidiateLists: Seq[String],
+      outputList: String,
+      body: Seq[ProgramStatement]
+  )
+
+  case class DefineComposition(name: String, funcNames: Seq[String])
+
+  case class CheckEquiv(name1: String, name2: String, assumptions: Seq[Assumption])
+
+}
+
+object InputFormatExamples {
+  import InputFormat._
+  // ($n: Int) -> [a] -> [a] -- $n は名前が入る穴
+  // "String => Simple SDST"
+  val take = DefineOpration(
+    signature = ("take", List("n", "l")),                          // (take n l)
+    definition = ("t", List(NilVal, "n", "l")),                    // (t nil n l)
+    auxFnArgs = List(ParamType.Acc, ParamType.Int, ParamType.Inp), // :aux-args acc param input
+    auxFnClauses = List(
+      // ((t acc n nil) acc)
+      AuxFnClause(
+        name = "t",
+        params = List("acc", "n", ListPattern.Nil),
+        body = List((Guard(Nil), Append("acc")))
+      ),
+      AuxFnClause(
+        name = "t",
+        params = List("acc", "n", ListPattern.Cons("x", "xs")),
+        body = List(
+          ( // ((> n 0) (t (++ acc (x)) (- n 1) xs))
+            Guard(List(GuardClause("n", Inequal.Gt, 0))),
+            FunCall("t", List(Append("acc", "x"), (Sign.Minus, "n", 1), "xs"))
+          ),
+          (Guard(List(GuardClause("n", Inequal.Le, 0))), NilVal)
+        )
+      )
+    )
+  )
+
+  // [a] -> [a]
+  // "Unit => Simple SDST"
+  val takeEven = DefineOpration(
+    signature = ("take-even", List("l")),
+    definition = ("te0", List(NilVal, "l")),
+    auxFnArgs = List(ParamType.Acc, ParamType.Inp),
+    auxFnClauses = List(
+      AuxFnClause("te0", List("acc", ListPattern.Nil), NoGuard("acc")),
+      AuxFnClause(
+        "te0",
+        List("acc", ListPattern.Cons("x", "xs")),
+        NoGuard(FunCall("te1", List("acc", "xs")))
+      ),
+      AuxFnClause("te1", List("acc", ListPattern.Nil), NoGuard("acc")),
+      AuxFnClause(
+        "te1",
+        List("acc", ListPattern.Cons("x", "xs")),
+        NoGuard(FunCall("te0", List(Append("acc", "x"), "xs")))
+      ),
+    )
+  )
+
+  // (n: String) -> [a] -> [a]
+  // "Simple Parikh SDST"
+  val concatSplit = DefineProgram(
+    name = "concat-split",
+    intParams = List("n"),
+    inputList = "inp",
+    intermidiateLists = List("x", "y"),
+    outputList = "z",
+    body = List(
+      Assignment("x", FunCall("take", Seq("n", "inp"))),
+      Assignment("y", FunCall("drop", Seq("n", "inp"))),
+      Assignment("z", FunCall("++", Seq("x", "y"))),
+    )
+  )
+
+  val checkEquiv_revTO_TOrev = CheckEquiv(
+    name1 = "rev-to",
+    name2 = "to-rev",
+    assumptions =
+      List(Assumption(Equal, Assumption.Mod(Assumption.Length, Assumption.Const(2)), Assumption.Const(1)))
+  )
+}
