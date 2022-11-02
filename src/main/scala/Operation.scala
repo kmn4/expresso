@@ -305,8 +305,8 @@ object IntValuedOperation {
         val (q0, qf) = (0, 1)
         val (iName, binding) = abstractA(idxTerm)
         type T = Term[Either[String, Int]]
-        val (i, c): (T, T) = (Var(Left(iName)), Var(Left(cName)))
-        val (input, index, code): (T, T, T) = (Var(Right(0)), Var(Right(1)), Var(Right(2)))
+        val (i, c)               = (Var(Left(iName)): T, Var(Left(cName)): T)
+        val (input, index, code) = (Var(Right(0)): T, Var(Right(1)): T, Var(Right(2)): T)
         ParikhAutomaton(
           Set(q0, qf),
           alphabet,

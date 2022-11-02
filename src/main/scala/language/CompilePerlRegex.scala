@@ -31,15 +31,15 @@ private object CompilePerlRegex {
       case PCRE.Alt(e1, e2) => derive(a)(e1) ++ derive(a)(e2)
       case PCRE.Greedy(e) =>
         val derived =
-          derive(a)(e) >>= [(Option[PCRE[A, X]], Parsed[A, X])] {
-            case (Some(f), w) => mp((Some(PCRE.Cat(f, PCRE.Greedy(e))), w))
+          derive(a)(e) >>= {
+            case (Some(f), w) => mp((Option(PCRE.Cat(f, PCRE.Greedy(e))), w))
             case (None, w)    => mp((None, w))
           }
         derived ++ mp((None, Seq.empty))
       case PCRE.NonGreedy(e) =>
         val derived =
-          derive(a)(e) >>= [(Option[PCRE[A, X]], Parsed[A, X])] {
-            case (Some(f), w) => mp((Some(PCRE.Cat(f, PCRE.NonGreedy(e))), w))
+          derive(a)(e) >>= {
+            case (Some(f), w) => mp((Option(PCRE.Cat(f, PCRE.NonGreedy(e))), w))
             case (None, w)    => mp((None, w))
           }
         mp[(Option[PCRE[A, X]], Parsed[A, X])]((None, Seq.empty)) ++ derived
@@ -181,11 +181,14 @@ private object CompilePerlRegex {
             }
             val toParent: Edge = {
               val zero: UpdateVar = sstVars.map(x => x -> Nil).toMap
-              val update: UpdateVar = if (x == None) zero + (Out() -> (Cop1(Out[X]()) +: rep.indexed.map {
-                case Right((x, i)) => Cop1(Rep(x, i))
-                case Left(a)       => Cop2(a)
-              }).toList)
-              else updates.unit
+              val update: UpdateVar = if (x == None) {
+                val y = Cop1(Out[X]())
+                val ys = rep.indexed.map {
+                  case Right((x, i)) => Cop1(Rep(x, i))
+                  case Left(a)       => Cop2(a)
+                }
+                zero + (Out() -> (y +: ys).toList)
+              } else updates.unit
               (cur, Right(RPar(x)), update, parent)
             }
             loops.toSet + fromParen + toParent

@@ -6,12 +6,12 @@ trait Monoid[M] {
 }
 
 object Monoid {
-  implicit def seqMonoid[A] = new Monoid[Seq[A]] {
-    def unit = Nil
+  implicit def seqMonoid[A]: Monoid[Seq[A]] = new Monoid[Seq[A]] {
+    def unit                            = Nil
     def combine(l1: Seq[A], l2: Seq[A]) = l1 ++ l2
   }
-  implicit def unitMonoid = new Monoid[Unit] {
-    def unit = ()
+  implicit def unitMonoid: Monoid[Unit] = new Monoid[Unit] {
+    def unit                        = ()
     def combine(u1: Unit, u2: Unit) = ()
   }
   implicit def vectorMonoid[K, V: Monoid](ks: Iterable[K]): Monoid[Map[K, V]] = new Monoid[Map[K, V]] {

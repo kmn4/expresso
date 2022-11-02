@@ -31,8 +31,8 @@ object CompileJavaScriptRegex {
       case PCRE.Alt(e1, e2) => derive(a)(e1) ++ derive(a)(e2)
       case PCRE.Greedy(e) =>
         val derived =
-          derive(a)(e) >>= [(RegO, Update)] {
-            case (Some(f), w) => mp((Some(PCRE.Cat(f, PCRE.Greedy(e))), w))
+          derive(a)(e) >>= {
+            case (Some(f), w) => mp((Option(PCRE.Cat(f, PCRE.Greedy(e))), w))
             case (None, w)    => mp.empty // JS ではスターの内側が空文字列にマッチしない
           }
         // 展開せず空文字列にマッチさせた場合、内側は `undefined` (JS) になる。
@@ -41,8 +41,8 @@ object CompileJavaScriptRegex {
         derived ++ mp((None, epsMatchUpdate))
       case PCRE.NonGreedy(e) =>
         val derived =
-          derive(a)(e) >>= [(RegO, Update)] {
-            case (Some(f), w) => mp((Some(PCRE.Cat(f, PCRE.NonGreedy(e))), w))
+          derive(a)(e) >>= {
+            case (Some(f), w) => mp((Option(PCRE.Cat(f, PCRE.NonGreedy(e))), w))
             case (None, w)    => mp.empty
           }
         val epsMatchUpdate = e.groupVars.map(_ -> Nil).toMap

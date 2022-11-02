@@ -1,7 +1,7 @@
 package com.github.kmn4.expresso.machine
 
 import com.github.kmn4.expresso.math.{Cop, Cop1, Cop2, Monoid}
-import com.github.kmn4.expresso.{graphToMap, searchStates}
+import com.github.kmn4.expresso.{graphToMap, searchStates, UpdateOps}
 
 case class NGSM[Q, A, B](
     states: Set[Q],

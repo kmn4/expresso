@@ -4,14 +4,21 @@ import com.github.kmn4.expresso._
 import com.github.kmn4.expresso.math._
 import com.github.kmn4.expresso.machine._
 
-/** グループ変数 X で添字付けられたキャプチャグループの括弧 */
-private sealed trait Paren[X]
-private case class LPar[X](x: X) extends Paren[X]
-private case class RPar[X](x: X) extends Paren[X]
-
 /** 優先度を考慮する正規表現のための構文。
   */
-sealed trait PCRE[A, X] {
+enum PCRE[A, X] {
+  case Empty()
+  case Eps()
+  case Chars(as: Set[A])
+  case Cat(e1: PCRE[A, X], e2: PCRE[A, X])
+  case Alt(e1: PCRE[A, X], e2: PCRE[A, X])
+  case Greedy(e: PCRE[A, X])
+  case NonGreedy(e: PCRE[A, X])
+  case Group(e: PCRE[A, X], x: X)
+  // Derivatives of group expressions.
+  case GDeriv(e: PCRE[A, X], x: X)
+  case AllChar()
+
   def usedChars: Set[A] = this match {
     case PCRE.Chars(as)                             => as
     case PCRE.Cat(e1, e2)                           => e1.usedChars ++ e2.usedChars
@@ -73,16 +80,7 @@ sealed trait PCRE[A, X] {
   }
 }
 
-object PCRE {
-  case class Empty[A, X]() extends PCRE[A, X]
-  case class Eps[A, X]() extends PCRE[A, X]
-  case class Chars[A, X](as: Set[A]) extends PCRE[A, X]
-  case class Cat[A, X](e1: PCRE[A, X], e2: PCRE[A, X]) extends PCRE[A, X]
-  case class Alt[A, X](e1: PCRE[A, X], e2: PCRE[A, X]) extends PCRE[A, X]
-  case class Greedy[A, X](e: PCRE[A, X]) extends PCRE[A, X]
-  case class NonGreedy[A, X](e: PCRE[A, X]) extends PCRE[A, X]
-  case class Group[A, X](e: PCRE[A, X], x: X) extends PCRE[A, X]
-  // Derivatives of group expressions.
-  case class GDeriv[A, X](e: PCRE[A, X], x: X) extends PCRE[A, X]
-  case class AllChar[A, X]() extends PCRE[A, X]
-}
+/** グループ変数 X で添字付けられたキャプチャグループの括弧 */
+private sealed trait Paren[X]
+private case class LPar[X](x: X) extends Paren[X]
+private case class RPar[X](x: X) extends Paren[X]

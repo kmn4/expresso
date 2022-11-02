@@ -20,10 +20,10 @@ object MonadPlus {
     def map[S](f: T => S): M[S] = this >>= (f andThen MonadPlus[M].apply)
   }
 
-  implicit val seqMonadPlus = new MonadPlus[Seq] {
-    def empty[T]: Seq[T] = Seq.empty
-    def apply[T](t: T): Seq[T] = Seq(t)
+  implicit val seqMonadPlus: MonadPlus[Seq] = new MonadPlus[Seq] {
+    def empty[T]: Seq[T]                                 = Seq.empty
+    def apply[T](t: T): Seq[T]                           = Seq(t)
     def flatMap[T, S](m: Seq[T])(f: T => Seq[S]): Seq[S] = m.flatMap(f)
-    def concat[T](m: Seq[T], n: Seq[T]): Seq[T] = m ++ n
+    def concat[T](m: Seq[T], n: Seq[T]): Seq[T]          = m ++ n
   }
 }

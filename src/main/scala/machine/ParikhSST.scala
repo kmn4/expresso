@@ -133,8 +133,8 @@ case class ParikhSST[Q, A, B, X, L, I](
     import scala.collection.mutable.{Map => MMap, Set => MSet}
     val res: MMap[Q, MSet[X]]           = MMap.empty.withDefault(_ => MSet.empty)
     def charExistsIn(xbs: XBS): Boolean = xbs.exists(_.is2)
-    var updated                         = false
-    do {
+    var updated = false
+    while ({ // converted from "do while" expression
       updated = false
       for ((q, _, mx, ml, r) <- edges) {
         val charAssignedX     = xs.filter(x => charExistsIn(mx(x)))
@@ -147,7 +147,8 @@ case class ParikhSST[Q, A, B, X, L, I](
           res(r) = resX
         }
       }
-    } while (updated)
+      updated
+    }) {}
 
     Map.from { res.map { case (q, s) => q -> s.toSet } }.withDefaultValue(Set.empty)
   }

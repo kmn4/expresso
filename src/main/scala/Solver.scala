@@ -111,9 +111,9 @@ class Solver(
       case Some(((ss, im), stringVars)) =>
         val sm = ss.zipWithIndex.map { case (value, idx) => stringVars(idx) -> value }.toMap
         val sModel =
-          for ((provider.UserVar(x), representative) <- userRepr)
+          for (case (provider.UserVar(x), representative) <- userRepr)
             yield x -> sm.getOrElse(representative, "")
-        val iModel = for ((provider.UserVar(name), value) <- im) yield name -> value
+        val iModel = for (case (provider.UserVar(name), value) <- im) yield name -> value
         for ((name, value) <- sModel) printLine(s"""(define-fun ${name} () String "${value}")""")
         for ((name, value) <- iModel) printLine(s"(define-fun $name () Int ${value})")
         Some((sModel, iModel))
@@ -312,14 +312,14 @@ class Solver(
       (CoreTheory.Equals, Presburger.Eq.apply[String] _),
       (Ints.LessThan, Presburger.Lt.apply[String] _),
       (Ints.LessEquals, Presburger.Le.apply[String] _),
-      (Ints.GreaterThan, Presburger.Gt _),
-      (Ints.GreaterEquals, Presburger.Ge _)
+      (Ints.GreaterThan, Presburger.Gt[String] _),
+      (Ints.GreaterEquals, Presburger.Ge[String] _)
     )
     def unapply(t: SMTTerm): Option[(Presburger.Formula[String], Seq[ParikhConstraint])] = {
       val binOpt = binary.find { case (op, _) => op.unapply(t).nonEmpty }.map { case (op, constructor) =>
-        val Some((t1, t2)) = op.unapply(t)
-        val (pt1, cs1) = expectInt(t1)
-        val (pt2, cs2) = expectInt(t2)
+        val Some((t1, t2)) = op.unapply(t): @unchecked
+        val (pt1, cs1)     = expectInt(t1)
+        val (pt2, cs2)     = expectInt(t2)
         (constructor(pt1, pt2), cs1 ++ cs2)
       }
       if (binOpt.nonEmpty) return Some(binOpt.get)
@@ -502,7 +502,7 @@ object PyExEscape extends Escape {
 object SMTLIBEscape extends Escape {
   private val pat = raw"\\u\{([\da-f]{1,5})\}".r
   private val fromHex = (s: String) => Integer.parseInt(s, 16).toChar.toString
-  def apply(s: String): String = s.map(c => s"\\u{${c.toHexString}}").mkString
+  def apply(s: String): String = s.map(c => s"\\u{${c.toInt.toHexString}}").mkString
   // Java の Matcher#replaceAll は挙動がおかしいので \\u{5c} に対して失敗する
   // (replacer の結果内の \ をエスケープ用プレフィックスと考える)
   def unescape(withEscape: String): String = pat.replaceAllIn(withEscape, m => fromHex(m.group(1)))

@@ -313,7 +313,7 @@ class Preprocessor(operations: Seq[Operation]) {
     }
     // 1., 2.
     // ここで文字列変数しか考えていないので、uf は整数変数の同値類を作らない
-    for (Core.Equals(StringVariable(x), StringVariable(y)) <- literals) {
+    for (case Core.Equals(StringVariable(x), StringVariable(y)) <- literals) {
       uf.make(x)
       uf.make(y)
       uf.union(x, y)
@@ -336,7 +336,7 @@ class Preprocessor(operations: Seq[Operation]) {
     val get = if (getModel >= 0) Some(Commands.GetModel()) else None
     val resCommands = (decls ++ bools.distinct.map(Commands.Assert.apply) ++ check ++ get).toSeq
     val userRepr =
-      for ((x @ provider.UserVar(_), Strings.StringSort()) <- sorts.map)
+      for (case (x @ provider.UserVar(_), Strings.StringSort()) <- sorts.map)
         yield (x, uf.applyOrElse(x, (_: String) => x))
     (resCommands, userRepr)
   }
