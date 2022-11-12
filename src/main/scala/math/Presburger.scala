@@ -30,6 +30,8 @@ object Presburger {
       case Mult(c, t)  => c.size + t.size + 1
       case Mod(t1, t2) => t1.size + t2.size + 1
     }
+
+    def renameVars[Y](f: X => Y): Term[Y] = Term.renameVars(this)(f)
   }
   case class Const[X](i: Int) extends Term[X]
   case class Var[X](x: X) extends Term[X]
@@ -115,6 +117,17 @@ object Presburger {
   }
 
   object Term {
+    def renameVars[X, Y](t: Term[X])(renamer: X => Y): Term[Y] = {
+      def aux(t: Term[X]): Term[Y] = t match {
+        case Const(i)    => Const(i)
+        case Var(x)      => Var(renamer(x))
+        case Add(ts)     => Add(ts.map(aux))
+        case Sub(t1, t2) => Sub(aux(t1), aux(t2))
+        case Mult(i, t)  => Mult(aux(i), aux(t))
+        case Mod(t1, t2) => Mod(aux(t1), aux(t2))
+      }
+      aux(t)
+    }
     def termToSMTLIB[X](t: Term[X]): String = t match {
       case Const(i)     => i.toString()
       case Var(x)       => x.toString()
@@ -187,17 +200,7 @@ object Presburger {
     }
     // NOTE renamer should be injective
     def renameVars[X, Y](f: Formula[X])(renamer: X => Y): Formula[Y] = {
-      def tm(t: Term[X]): Term[Y] = {
-        def aux(t: Term[X]): Term[Y] = t match {
-          case Const(i)    => Const(i)
-          case Var(x)      => Var(renamer(x))
-          case Add(ts)     => Add(ts.map(aux))
-          case Sub(t1, t2) => Sub(aux(t1), aux(t2))
-          case Mult(i, t)  => Mult(aux(i), aux(t))
-          case Mod(t1, t2) => Mod(aux(t1), aux(t2))
-        }
-        aux(t)
-      }
+      def tm(t: Term[X]): Term[Y] = Term.renameVars(t)(renamer)
       def aux(f: Formula[X]): Formula[Y] = f match {
         case Top()      => Top()
         case Bot()      => Bot()
@@ -302,5 +305,15 @@ object Presburger {
       def ||(g: Formula[X]): Formula[X] = Disj(Seq(f, g))
       def ==>(g: Formula[X]): Formula[X] = Implies(f, g)
     }
+  }
+
+  def conjunctiveMonoid[X]: Monoid[Formula[X]] = new Monoid[Formula[X]] {
+    def unit: Formula[X]                                    = Top()
+    def combine(m1: Formula[X], m2: Formula[X]): Formula[X] = Conj(Seq(m1, m2))
+  }
+
+  def disjunctiveMonoid[X]: Monoid[Formula[X]] = new Monoid[Formula[X]] {
+    def unit: Formula[X]                                    = Bot()
+    def combine(m1: Formula[X], m2: Formula[X]): Formula[X] = Disj(Seq(m1, m2))
   }
 }

@@ -1,9 +1,16 @@
 package com.github.kmn4.expresso.machine
 
 import com.github.kmn4.expresso
+import com.github.kmn4.expresso.Cupstar
+import com.github.kmn4.expresso.math.Monoid
 import com.github.kmn4.expresso.math.Presburger
 import com.github.kmn4.expresso.math.Presburger.{Var, Formula => PresFormula}
 import com.github.kmn4.expresso.math.{Cop1, Cop2, Cop}
+import com.github.kmn4.expresso.math.Presburger.Add
+import com.github.kmn4.expresso.math.Presburger.Const
+import com.github.kmn4.expresso.math.Presburger.Mod
+import com.github.kmn4.expresso.math.Presburger.Mult
+import com.github.kmn4.expresso.math.Presburger.Sub
 
 enum CurrOrDelim { case curr, delim }
 
@@ -130,6 +137,18 @@ abstract class SimpleStreamingDataStringTransducer2 {
     } yield x
     valuesListVars subsetOf listVars
   }
+
+  override def toString(): String =
+    s"transitions=${transitions}" ++
+      s"initialStates=${initialStates}" ++
+      s"outputRelation=${outputRelation}" ++
+      s"listVars=${listVars}" ++
+      s"parikhLabels=${parikhLabels}" ++
+      s"intParams=${intParams}" ++
+      s"states=${states}" ++
+      s"initialState=${initialState}" ++
+      s"acceptFormulae=${acceptFormulae}"
+
 }
 
 object SimpleStreamingDataStringTransducer2 {
@@ -152,33 +171,6 @@ object SimpleStreamingDataStringTransducer2 {
   private val sliceLabels @ Seq(seekedLabel, takenLabel, inputLabel) = Seq(0, 1, 2)
 
   import CurrOrDelim._
-
-  private class PresSugar[X] {
-    import Presburger._
-    type Var     = Presburger.Var[X]
-    type Term    = Presburger.Term[X]
-    type Formula = Presburger.Formula[X]
-    implicit def const(i: Int): Term = Const(i)
-    implicit class TermOps(t: Term) {
-      def +(s: Term): Term      = Add(Seq(t, s))
-      def -(s: Term): Term      = Sub(t, s)
-      def *(i: Int): Term       = Mult(Const(i), t)
-      def ===(s: Term): Formula = Eq(t, s)
-      def <(s: Term): Formula   = Lt(t, s)
-      def <=(s: Term): Formula  = Le(t, s)
-      def >(s: Term): Formula   = Gt(t, s)
-      def >=(s: Term): Formula  = Ge(t, s)
-      def !==(s: Term): Formula = !(t === s)
-    }
-    implicit class FormulaOps(f: Formula) {
-      def unary_! : Formula        = Not(f)
-      def &&(g: Formula): Formula  = Conj(Seq(f, g))
-      def ||(g: Formula): Formula  = Disj(Seq(f, g))
-      def ==>(g: Formula): Formula = Implies(f, g)
-    }
-  }
-
-  private class PresburgerFormulaSugarForParikhAutomaton[I, L] extends PresSugar[Either[I, L]]
 
   def slice(begin: String, end: String): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = {
     val states @ Seq(seeking, taking, ignoring) = Seq(0, 1, 2)
@@ -516,9 +508,42 @@ object SimpleStreamingDataStringTransducer2 {
   }
 }
 
-object DataStringTransducerExamples extends App {
+private class PresSugar[X] {
+  import Presburger._
+  type Var     = Presburger.Var[X]
+  type Term    = Presburger.Term[X]
+  type Formula = Presburger.Formula[X]
+  implicit def const(i: Int): Term = Const(i)
+  implicit class TermOps(t: Term) {
+    def +(s: Term): Term      = Add(Seq(t, s))
+    def -(s: Term): Term      = Sub(t, s)
+    def *(i: Int): Term       = Mult(Const(i), t)
+    def ===(s: Term): Formula = Eq(t, s)
+    def <(s: Term): Formula   = Lt(t, s)
+    def <=(s: Term): Formula  = Le(t, s)
+    def >(s: Term): Formula   = Gt(t, s)
+    def >=(s: Term): Formula  = Ge(t, s)
+    def !==(s: Term): Formula = !(t === s)
+  }
+  implicit class FormulaOps(f: Formula) {
+    def unary_! : Formula        = Not(f)
+    def &&(g: Formula): Formula  = Conj(Seq(f, g))
+    def ||(g: Formula): Formula  = Disj(Seq(f, g))
+    def ==>(g: Formula): Formula = Implies(f, g)
+  }
+}
 
-  // セマンティクスの定義
+private class PresburgerFormulaSugarForParikhAutomaton[I, L] extends PresSugar[Either[I, L]] {
+  def param(x: I): Var = Var(Left(x))
+  def label(x: L): Var = Var(Right(x))
+
+  extension (term: Presburger.Term[I]) {
+    def injected: Term = term.renameVars(Left(_))
+  }
+}
+
+// セマンティクスの定義
+object SDSTSemantics {
 
   import CurrOrDelim.{curr, delim}
   type DataOrDelimSeq = Seq[Either[Int, delim.type]]
@@ -603,6 +628,36 @@ object DataStringTransducerExamples extends App {
     result.head._1
   }
 
+}
+
+object SemanticsSpecs {
+
+  import SDSTSemantics._
+
+  def take(machine: SimpleStreamingDataStringTransducer2, nTake: String) = {
+    assert(transduce(machine, Map(nTake -> 2), seq(1, 2, 3)) == seq(1, 2))
+    assert(transduce(machine, Map(nTake -> -2), seq(1, 2, 3)) == seq())
+    assert(transduce(machine, Map(nTake -> 5), seq(1, 2, 3)) == seq(1, 2, 3))
+  }
+
+  def drop(machine: SimpleStreamingDataStringTransducer2, nTake: String) = {
+    assert(transduce(machine, Map(nTake -> 2), seq(1, 2, 3)) == seq(3))
+    assert(transduce(machine, Map(nTake -> -2), seq(1, 2, 3)) == seq(1, 2, 3))
+    assert(transduce(machine, Map(nTake -> 5), seq(1, 2, 3)) == seq())
+  }
+
+  def takeEven(machine: SimpleStreamingDataStringTransducer2) = {
+    assert(transduce(machine, Map(), seq(1, 2, 3)) == seq(2))
+    assert(transduce(machine, Map(), seq(1, 2, 3, 4)) == seq(2, 4))
+    assert(transduce(machine, Map(), seq()) == seq())
+  }
+
+}
+
+object DataStringTransducerExamples extends App {
+
+  import SDSTSemantics._
+
   // トランスデューサのインスタンスとセマンティクスのテスト
 
   val reverse = SimpleStreamingDataStringTransducer2.reverse
@@ -666,9 +721,7 @@ object DataStringTransducerExamples extends App {
   val concat = concatDelim(numReadStrings = 3, operands = Seq(1, 2))
   val projId = projection(numReadStrings = 1, operands = Seq(0))
   // セマンティクステストの assert たち
-  assert(transduce(tak, Map(i -> 2), seq(1, 2, 3)) == seq(1, 2))
-  assert(transduce(tak, Map(i -> -2), seq(1, 2, 3)) == seq())
-  assert(transduce(tak, Map(i -> 5), seq(1, 2, 3)) == seq(1, 2, 3))
+  SemanticsSpecs.take(tak, i)
   assert(transduce(concat, Map(), seq(1, :#, 2, :#, 3, :#)) == seq(1, :#, 2, :#, 3, :#, 2, 3, :#))
   assert(transduce(comp, Map(i -> -2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
   assert(transduce(comp, Map(i -> 2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
@@ -991,6 +1044,22 @@ private object SimplePA2 {
 
 }
 
+private sealed abstract class Comparator
+private case object Equal extends Comparator
+private enum Inequal extends Comparator {
+  case Le, Lt, Ge, Gt
+  def dual: Comparator = this match {
+    case Le => Gt
+    case Lt => Ge
+    case Ge => Lt
+    case Gt => Le
+  }
+  def isLess: Boolean = this match {
+    case Le | Lt => true
+    case _       => false
+  }
+}
+
 object InputFormat {
 
   enum ParamType { case Acc, Int, Inp }
@@ -1003,10 +1072,7 @@ object InputFormat {
     case Cons(head: String, tail: String)
   }
 
-  sealed abstract class Comparator
-  case object Equal extends Comparator
-  enum Inequal      extends Comparator { case Le, Lt, Ge, Gt }
-  case class GuardClause(name: String, comparator: Inequal, threshold: Int)
+  case class GuardClause(name: String, comparator: Inequal, threshold: ArithExp)
   case class Guard(conjuncts: Seq[GuardClause]) {
     /// TODO: assert
     // 各 name につき conjusts は１つ
@@ -1016,18 +1082,51 @@ object InputFormat {
   type ArgExp = Append | NilVal | Increment | String
   case class Append(names: String*)
   type Increment = (Sign, String, Int)
-  enum Sign { case Minus, Plus }
+  enum Sign {
+    case Minus, Plus
+    import math.Numeric.Implicits.infixNumericOps
+    def apply[A: Numeric](n: A): A = if (this == Minus) -n else n
+  }
+  enum ArithExp {
+    case Const(n: Int)
+    case Var(name: String)
+    case Mod(divident: ArithExp, divisor: ArithExp) // NOTE: divisor must be Const to be linear
+    case Add(e1: ArithExp, e2: ArithExp)
+    case Sub(e1: ArithExp, e2: ArithExp)
+    case Mul(e1: ArithExp, e2: ArithExp) // NOTE: args must be Const to be linear
+
+    def toPresburgerTerm: Presburger.Term[String] = this match {
+      case ArithExp.Const(n)          => Presburger.Const(n)
+      case ArithExp.Var(name: String) => Presburger.Var(name)
+      case ArithExp.Mod(divident: ArithExp, divisor: ArithExp) =>
+        Presburger.Mod(divident.toPresburgerTerm, divisor.toPresburgerTerm)
+      case ArithExp.Add(e1: ArithExp, e2: ArithExp) =>
+        Presburger.Add(Seq(e1.toPresburgerTerm, e2.toPresburgerTerm))
+      case ArithExp.Sub(e1: ArithExp, e2: ArithExp) =>
+        Presburger.Sub(e1.toPresburgerTerm, e2.toPresburgerTerm)
+      case ArithExp.Mul(e1: ArithExp, e2: ArithExp) =>
+        Presburger.Mult(e1.toPresburgerTerm, e2.toPresburgerTerm)
+    }
+  }
+
   final case class FunCall(name: String, args: Seq[ArgExp])
 
   case class AuxFnClause(
       name: String,
-      params: Seq[String | ListPattern],
-      // NOTE: body の String はリスト変数
-      body: Seq[(Guard, Append | NilVal | String | FunCall)]
+      params: AuxFnParams,
+      body: Seq[(Guard, Append | NilVal | String /* リスト変数 */ | FunCall)]
   )
 
-  def NoGuard: Append | NilVal | String | FunCall => Seq[(Guard, Append | NilVal | String | FunCall)] =
-    x => List((Guard(Nil), x))
+  type AuxFnParams = (Seq[String], ListPattern)
+
+  object NoGuard {
+    def apply(x: Append | NilVal | String | FunCall): Seq[(Guard, Append | NilVal | String | FunCall)] =
+      List((Guard(Nil), x))
+    def unapply(
+        xs: Seq[(Guard, Append | NilVal | String | FunCall)]
+    ): Option[Append | NilVal | String | FunCall] =
+      Option.when(xs.size == 1 && xs.head._1.conjuncts.length == 0)(xs.head._2)
+  }
 
   sealed abstract class ProgramStatement
   final case class Assignment(lhs: String, rhs: FunCall) extends ProgramStatement
@@ -1036,6 +1135,7 @@ object InputFormat {
   object Assumption {
     sealed abstract class Exp
     final case class Const(n: Int)                    extends Exp
+    final case class Var(name: String)                extends Exp
     case object Length                                extends Exp
     final case class Mod(divident: Exp, divisor: Exp) extends Exp // NOTE: divisor must be Const to be linear
     final case class Add(e1: Exp, e2: Exp)            extends Exp
@@ -1045,12 +1145,20 @@ object InputFormat {
 
   /// Top-level forms
 
-  case class DefineOpration(
+  // TODO: シグネチャの整数引数間で線形演算したものを定義に渡しても大丈夫かもしれない
+  // (defop (take-add n m l) (rec nil (+ n m) l))
+  // (defop (subseq beg len xs) (rec nil beg (+ beg len) xs))
+  // この場合はシグネチャの引数が SDST の Param,
+  // 相互再帰関数の引数が ParikhLabel に対応するため、
+  // より SDST に近い表現と言えるかも
+  case class DefineOperation(
       signature: (String, Seq[String]),
-      definition: (String, Seq[String | NilVal]),
+      definition: (String, DefinitionArgs),
       auxFnArgs: Seq[ParamType],
       auxFnClauses: Seq[AuxFnClause]
   )
+
+  type DefinitionArgs = (Seq[NilVal | ArithExp], String /* リスト変数の名前 */ )
 
   case class DefineProgram(
       name: String,
@@ -1067,56 +1175,94 @@ object InputFormat {
 
 }
 
-object InputFormatExamples {
+object InputFormatExamples extends App {
   import InputFormat._
   // ($n: Int) -> [a] -> [a] -- $n は名前が入る穴
   // "String => Simple SDST"
-  val take = DefineOpration(
+  val take = DefineOperation(
     signature = ("take", List("n", "l")),                          // (take n l)
-    definition = ("t", List(NilVal, "n", "l")),                    // (t nil n l)
+    definition = ("t", (List(NilVal, ArithExp.Var("n")), "l")),    // (t nil n l)
     auxFnArgs = List(ParamType.Acc, ParamType.Int, ParamType.Inp), // :aux-args acc param input
     auxFnClauses = List(
       // ((t acc n nil) acc)
       AuxFnClause(
         name = "t",
-        params = List("acc", "n", ListPattern.Nil),
+        params = (List("acc", "n"), ListPattern.Nil),
         body = List((Guard(Nil), Append("acc")))
       ),
       AuxFnClause(
         name = "t",
-        params = List("acc", "n", ListPattern.Cons("x", "xs")),
+        params = (List("acc", "n"), ListPattern.Cons("x", "xs")),
         body = List(
           ( // ((> n 0) (t (++ acc (x)) (- n 1) xs))
-            Guard(List(GuardClause("n", Inequal.Gt, 0))),
+            Guard(List(GuardClause("n", Inequal.Gt, ArithExp.Const(0)))),
             FunCall("t", List(Append("acc", "x"), (Sign.Minus, "n", 1), "xs"))
           ),
-          (Guard(List(GuardClause("n", Inequal.Le, 0))), NilVal)
+          // ((<= n 0) acc)
+          (Guard(List(GuardClause("n", Inequal.Le, ArithExp.Const(0)))), "acc")
         )
       )
     )
   )
 
+  val drop = DefineOperation(
+    signature = ("drop", List("n", "l")),                          // (drop n l)
+    definition = ("rec", (List(NilVal, ArithExp.Var("n")), "l")),  // (rec nil n l)
+    auxFnArgs = List(ParamType.Acc, ParamType.Int, ParamType.Inp), // :aux-args acc param input
+    auxFnClauses = List(
+      // ((rec acc n nil) acc)
+      AuxFnClause(
+        name = "rec",
+        params = (List("acc", "n"), ListPattern.Nil),
+        body = List((Guard(Nil), Append("acc")))
+      ),
+      AuxFnClause(
+        name = "rec",
+        params = (List("acc", "n"), ListPattern.Cons("x", "xs")),
+        body = List(
+          ( // ((> n 0) (rec acc (- n 1) xs))
+            Guard(List(GuardClause("n", Inequal.Gt, ArithExp.Const(0)))),
+            FunCall("rec", List("acc", (Sign.Minus, "n", 1), "xs"))
+          ),
+          // ((<= n 0) (++ (list x) xs))
+          (Guard(List(GuardClause("n", Inequal.Le, ArithExp.Const(0)))), Append("x", "xs"))
+        )
+      )
+    )
+  )
+
+  extension (description: InputFormat.DefineOperation) {
+    def toSDST(paramNames: String*) =
+      GuardedSDST_withShortcuts.fromInputFormat(description)(paramNames).shortcutsEliminatedByEmulation.toSDST
+  }
+
+  SemanticsSpecs.take(take.toSDST("c"), "c")
+
+  SemanticsSpecs.drop(drop.toSDST("c"), "c")
+
   // [a] -> [a]
   // "Unit => Simple SDST"
-  val takeEven = DefineOpration(
+  val takeEven = DefineOperation(
     signature = ("take-even", List("l")),
-    definition = ("te0", List(NilVal, "l")),
+    definition = ("te0", (List(NilVal), "l")),
     auxFnArgs = List(ParamType.Acc, ParamType.Inp),
     auxFnClauses = List(
-      AuxFnClause("te0", List("acc", ListPattern.Nil), NoGuard("acc")),
+      AuxFnClause("te0", (List("acc"), ListPattern.Nil), NoGuard("acc")),
       AuxFnClause(
         "te0",
-        List("acc", ListPattern.Cons("x", "xs")),
+        (List("acc"), ListPattern.Cons("x", "xs")),
         NoGuard(FunCall("te1", List("acc", "xs")))
       ),
-      AuxFnClause("te1", List("acc", ListPattern.Nil), NoGuard("acc")),
+      AuxFnClause("te1", (List("acc"), ListPattern.Nil), NoGuard("acc")),
       AuxFnClause(
         "te1",
-        List("acc", ListPattern.Cons("x", "xs")),
+        (List("acc"), ListPattern.Cons("x", "xs")),
         NoGuard(FunCall("te0", List(Append("acc", "x"), "xs")))
       ),
     )
   )
+
+  SemanticsSpecs.takeEven(takeEven.toSDST())
 
   // (n: String) -> [a] -> [a]
   // "Simple Parikh SDST"
@@ -1138,5 +1284,504 @@ object InputFormatExamples {
     name2 = "to-rev",
     assumptions =
       List(Assumption(Equal, Assumption.Mod(Assumption.Length, Assumption.Const(2)), Assumption.Const(1)))
+  )
+}
+
+private case object restInp
+
+// 間違えて GuardedSDST として使うことがない
+private abstract class GuardedSDST_withShortcuts {
+  import CurrOrDelim.{curr as currPtr}
+  val sdst: GuardedSDST
+  export sdst._
+  type ListSpec = Cupstar[ListVar, currPtr.type | restInp.type]
+  type Shortcut = (State, Guard, ListSpec)
+  val shortcuts: Set[Shortcut]
+
+  override def toString: String =
+    s"states=${states}" ++
+      s"initialState=${initialState}" ++
+      s"listVars=${listVars}" ++
+      s"labels=${labels}" ++
+      s"params=${params}" ++
+      s"initialParikhImage=${initialParikhImage}" ++
+      s"transitions=${transitions}" ++
+      s"outputFunction=${outputFunction}" ++
+      s"shortcuts=${shortcuts}"
+
+  def shortcutsEliminatedByEmulation: GuardedSDST = {
+    // If (p, phi, w) \in shortcuts, then
+    // introduce c_1, ..., c_m for curr,
+    // r_1, ..., r_n for rest, and new state q'.
+
+    // fresh list var for i-th curr or rest
+    enum NewListVar { case Wrap(x: ListVar); case Curr(i: Int); case Rest(i: Int) }
+    // fresh state for d-th shortcut
+    enum NewState { case Wrap(q: State); case New(d: Int) }
+
+    implicit class InjState(q: State)     { def injected = NewState.Wrap(q)   }
+    implicit class InjListVar(x: ListVar) { def injected = NewListVar.Wrap(x) }
+
+    val orderedShortcuts = shortcuts.toSeq
+
+    val maxCurr            = orderedShortcuts.map(s => s._3.count(_ == Cop2(currPtr))).maxOption.getOrElse(0)
+    val maxRest            = orderedShortcuts.map(s => s._3.count(_ == Cop2(restInp))).maxOption.getOrElse(0)
+    val currVars           = (0 until maxCurr) map (i => NewListVar.Curr(i))
+    val restVars           = (0 until maxRest) map (i => NewListVar.Rest(i))
+    val additionalListVars = currVars ++ restVars
+
+    val additionalStates = (0 until orderedShortcuts.length) map (NewState.New(_))
+
+    val zeros = ParikhImage.zeros(labels)
+
+    val newListVars = listVars.map(_.injected) ++ additionalListVars
+    val newStates   = states.map(_.injected) ++ additionalStates
+
+    val identityUpdate                                  = expresso.Update.identity(newListVars)
+    def cop1[A, B](x: A): expresso.math.Cop[A, B]       = expresso.math.Cop1(x)
+    def cop2[A](x: A): expresso.math.Cop[NewListVar, A] = expresso.math.Cop2(x)
+    def overrideVariables[A](vars: Iterable[NewListVar], string: Seq[A]): expresso.Update[NewListVar, A] =
+      Map.from(vars.map(x => x -> string.map(cop2).toList))
+    def appendToVariables[A](vars: Iterable[NewListVar], string: Seq[A]): expresso.Update[NewListVar, A] =
+      Map.from(vars.map(x => x -> (Seq(cop1(x)) ++ string.map(cop2)).toList))
+    val rememberCurr = identityUpdate ++ overrideVariables[currPtr.type](currVars, Seq(currPtr))
+    val appendToRest = identityUpdate ++ appendToVariables[currPtr.type](restVars, Seq(currPtr))
+
+    val additionalTransitions =
+      collection.mutable.Set
+        .empty[(NewState, Guard, expresso.Update[NewListVar, currPtr.type], ParikhImage, NewState)]
+    // TODO: これの値域に Wrap(Cop1(0)) がなぜか許されている
+    val additionalOutput = collection.mutable.Map.empty[NewState, Seq[NewListVar]]
+    for (((state, guard, spec), d) <- orderedShortcuts.zipWithIndex) {
+      val substitute: Seq[Cop[ListVar, currPtr.type | restInp.type]] => Seq[NewListVar] = { xs =>
+        val cntCurr, cntRest = Counter(-1)
+        xs map {
+          case Cop2(x) if x == currPtr => NewListVar.Curr(cntCurr.add1)
+          case Cop2(x) if x == restInp => NewListVar.Rest(cntRest.add1)
+          case Cop1(x)                 => x.injected
+        }
+      }
+      val loop = NewState.New(d)
+      additionalTransitions.add((state.injected, guard, rememberCurr, zeros, loop))
+      additionalTransitions.add((loop, guard, appendToRest, zeros, loop))
+      additionalOutput.addOne((loop, substitute(spec)))
+    }
+
+    implicit class InjCupstar(w: expresso.Cupstar[ListVar, currPtr.type]) {
+      def injected = w map { _.map1(_.injected) }
+    }
+    implicit class InjUpdate(u: Update) {
+      def injected = identityUpdate ++ u.map { case (x, w) => x.injected -> w.injected }
+    }
+    implicit class InjEdge(e: Edge) {
+      def injected = (srcOf(e).injected, guardOf(e), updateOf(e).injected, imageOf(e), dstOf(e).injected)
+    }
+    implicit class InjSpec(w: Seq[ListVar])         { def injected = w map (_.injected)             }
+    implicit class InjOut(o: (State, Seq[ListVar])) { def injected = o._1.injected -> o._2.injected }
+    val injectedTransitions    = transitions map (_.injected)
+    val injectedOutputFunction = outputFunction map (_.injected)
+
+    val newTransitions    = injectedTransitions ++ additionalTransitions
+    val newOutputFunction = injectedOutputFunction ++ additionalOutput
+
+    GuardedSDST(
+      newStates,
+      initialState.injected,
+      newListVars,
+      labels,
+      params,
+      initialParikhImage,
+      newTransitions,
+      newOutputFunction
+    )
+  }
+}
+
+object GuardedSDST_withShortcuts {
+
+  def fromInputFormat(description: InputFormat.DefineOperation): Seq[String] => GuardedSDST_withShortcuts =
+    (paramNames: Seq[String]) => {
+      import InputFormat._
+      import CurrOrDelim.{curr => currPtr}
+      val states                           = description.auxFnClauses.map(_.name).toSet
+      val (initialState, definitionParams) = description.definition
+      val (defNonInput, defInputList)      = definitionParams
+      val nListVars                        = defNonInput.count(_ == NilVal)
+      val nLabels                          = defNonInput.count(_ != NilVal)
+      val listVars                         = Set.from(0 until nListVars)
+      val labels                           = Set.from(0 until nLabels)
+      val params                           = Set.from(paramNames)
+      val signatureParams                  = description.signature._2.init
+      require(paramNames.length == signatureParams.length)
+      val paramName = Map.from(signatureParams zip paramNames)
+      def translateArithExp[A >: ArithExp]: PartialFunction[A, Presburger.Term[String]] = {
+        case x: ArithExp => x.toPresburgerTerm.renameVars(paramName)
+      }
+      val defArithExps       = defNonInput collect translateArithExp
+      val initialParikhImage = Map.from(defArithExps.zipWithIndex.map(_.swap))
+      val (nilClauses, consClauses) = description.auxFnClauses partition {
+        case AuxFnClause(_, (_, ListPattern.Nil), _)        => true
+        case AuxFnClause(_, (_, ListPattern.Cons(_, _)), _) => false
+      }
+      type AccOrInt = ParamType.Acc.type | ParamType.Int.type
+      def zipParamsWithTypes(params: Seq[String]): Seq[(String, AccOrInt)] = {
+        val types = description.auxFnArgs.collect[AccOrInt] { case x: AccOrInt => x }
+        params zip types
+      }
+      def partitionParamsByTypes(params: Seq[String]): (Seq[String] /* Aux */, Seq[String] /* Int */ ) = {
+        val map = zipParamsWithTypes(params).toMap[String, AccOrInt]
+        params partition (name =>
+          map(name) match {
+            case ParamType.Acc => true
+            case ParamType.Int => false
+          }
+        )
+      }
+      def paramTranslation(params: Seq[String]): (Map[String, Int], Map[String, Int]) = {
+        val (auxParams, intParams) = partitionParamsByTypes(params)
+        val trAux                  = auxParams.zipWithIndex.toMap
+        val trInt                  = intParams.zipWithIndex.toMap
+        (trAux, trInt)
+      }
+      val outputFunction = nilClauses.map { case AuxFnClause(name, (params, _), body) =>
+        val (auxParams, intParams)                      = partitionParamsByTypes(params)
+        val listVar                                     = auxParams.zipWithIndex.toMap
+        val NoGuard(output: (Append | NilVal | String)) = body: @unchecked
+        val spec = output match {
+          case Append(names: _*) => names.map(listVar)
+          case NilVal            => Nil
+          case x: String         => List(listVar(x))
+        }
+        name -> spec
+      }.toMap
+      val expandedConsClauses = for {
+        AuxFnClause(name, params, body) <- consClauses
+        (guard, next)                   <- body
+      } yield (name, params, guard, next)
+      val (transClauses, shortClauses) = expandedConsClauses partitionMap { case cls @ (_, _, _, next) =>
+        next match {
+          case x: FunCall                    => Left(cls.copy(_4 = x))
+          case x: (Append | NilVal | String) => Right(cls.copy(_4 = x))
+        }
+      }
+      // TODO: types
+      def translateGuard(
+          intParams: Map[String, Int],
+          guard: InputFormat.Guard
+      ): Map[Int, (Inequal, Presburger.Term[String])] =
+        Map
+          .from(guard.conjuncts map { case GuardClause(name, comparator, threshold) =>
+            intParams(name) -> (comparator, translateArithExp(threshold))
+          })
+          .toMap
+      import expresso.math.{Cop, Cop1, Cop2}
+      def translateListParam[A](special: PartialFunction[String, A], auxParams: String => Int)(
+          x: String
+      ): Cop[Int, A] = x match {
+        case _ if special.isDefinedAt(x) => Cop2(special(x))
+        case _                           => Cop1(auxParams(x))
+      }
+      // TODO: types
+      def translateOutput[A](
+          special: PartialFunction[String, A],
+          auxParams: String => Int,
+          output: Append | NilVal | String
+      ): Cupstar[Int, A] = {
+        val trVar = translateListParam(special, auxParams)
+        output match {
+          case Append(names: _*) => List.from(names map trVar)
+          case NilVal            => Nil
+          case x: String         => List(trVar(x))
+        }
+      }
+      val shortcuts = Set.from(shortClauses map {
+        // TODO: 以下の警告は consClauses の型を工夫することで回避できるはず
+        case (name, (params, ListPattern.Cons(hd, tl)), guard, output) =>
+          val (auxParams, intParams) = paramTranslation(params)
+          (
+            name,
+            translateGuard(intParams, guard),
+            translateOutput[currPtr.type | restInp.type](Map(hd -> currPtr, tl -> restInp), auxParams, output)
+          )
+      })
+      def makeUpdate(
+          head: String,
+          auxParams: String => Int,
+          nextArgs: Seq[Append | NilVal | String]
+      ): expresso.Update[Int, currPtr.type] = Map.from(nextArgs.zipWithIndex map { case (args, x) =>
+        x -> translateOutput[currPtr.type](Map(head -> currPtr), auxParams, args)
+      })
+      def makeImage(intParams: String => Int, nextArgs: Seq[Increment | String]): Map[Int, Int] =
+        Map.from(nextArgs map {
+          case (sign, name, n) => intParams(name) -> sign(n)
+          case name: String    => intParams(name) -> 0
+        })
+      val transitions = Set.from(transClauses map {
+        case (name, (params, ListPattern.Cons(hd, tl)), guard, FunCall(nextName, nextArgs)) =>
+          val (auxParams, intParams) = paramTranslation(params)
+          // require(??? /* nextArgs の正しい位置に tl がある */ )
+          // require(??? /* nextArgs の型の並びと auxFunArgs の並びが同じ */ )
+          val (nextAuxs, nextInts) =
+            nextArgs.init.partitionMap[Append | NilVal | String, Increment | String] {
+              case x: (Append | NilVal)                  => Left(x)
+              case x: Increment                          => Right(x)
+              case x: String if auxParams.isDefinedAt(x) => Left(x)
+              case x: String if intParams.isDefinedAt(x) => Right(x)
+            }
+          // require(??? /* nextInts は intParams の順に並んでいる */ )
+          (
+            name,
+            translateGuard(intParams, guard),
+            makeUpdate(hd, auxParams, nextAuxs),
+            makeImage(intParams, nextInts),
+            nextName
+          )
+      })
+      GuardedSDST_withShortcuts[String, Int, Int](
+        GuardedSDST[String, Int, Int](
+          states,
+          initialState,
+          listVars,
+          labels,
+          params,
+          initialParikhImage,
+          transitions,
+          outputFunction
+        ),
+        shortcuts
+      )
+    }
+
+  import CurrOrDelim.{curr as currPtr}
+
+  private class GuardedSDST_withShortcuts_Impl[Q, X, L](
+      val sdst: GuardedSDST { type State = Q; type ListVar = X; type ParikhLabel = L },
+      val shortcuts: Set[(sdst.State, sdst.Guard, Cupstar[sdst.ListVar, currPtr.type | restInp.type])]
+  ) extends GuardedSDST_withShortcuts
+
+  def apply[Q, X, L](
+      sdst: GuardedSDST { type State = Q; type ListVar = X; type ParikhLabel = L },
+      shortcuts: Set[(sdst.State, sdst.Guard, Cupstar[sdst.ListVar, currPtr.type | restInp.type])]
+  ): GuardedSDST_withShortcuts { type State = Q; type ListVar = X; type ParikhLabel = L } =
+    GuardedSDST_withShortcuts_Impl(
+      sdst,
+      shortcuts
+    )
+}
+
+private class Counter private (initial: Int) {
+  private var count = initial
+  def get           = count
+  def add1          = { count += 1; count }
+}
+
+private object Counter {
+  def apply(initial: Int): Counter = new Counter(initial)
+}
+
+private object ParikhImage {
+  def zeros[L](labels: Set[L]): Map[L, Int] = labels.map(_ -> 0).toMap
+}
+
+private abstract class GuardedSDST {
+
+  import CurrOrDelim.curr
+
+  /// abstract members & concrete types
+  type State
+  type ListVar
+  type ParikhLabel
+  type Update      = expresso.Update[ListVar, curr.type]
+  type ParikhImage = Map[ParikhLabel, Int] // 負でも良い
+  type ParamTerm   = Presburger.Term[Param]
+  type Guard       = Map[ParikhLabel, (Inequal, ParamTerm)]
+  type Edge        = (State, Guard, Update, ParikhImage, State)
+  type Param       = String                // needs to be String by SDST2 definition
+  val states: Set[State]
+  val initialState: State
+  val listVars: Set[ListVar]
+  val labels: Set[ParikhLabel]
+  val params: Set[Param]
+  val initialParikhImage: Map[ParikhLabel, ParamTerm] // 拡張 Parikh 像の仮想的な初期値
+  val transitions: Set[Edge]
+  val outputFunction: Map[State, Seq[ListVar]]
+
+  /// concrete menber
+  def srcOf(e: Edge): State         = e._1
+  def dstOf(e: Edge): State         = e._5
+  def guardOf(e: Edge): Guard       = e._2
+  def updateOf(e: Edge): Update     = e._3
+  def imageOf(e: Edge): ParikhImage = e._4
+
+  override def toString(): String =
+    s"states=${states}" ++
+      s"initialState=${initialState}" ++
+      s"listVars=${listVars}" ++
+      s"labels=${labels}" ++
+      s"params=${params}" ++
+      s"initialParikhImage=${initialParikhImage}" ++
+      s"transitions=${transitions}" ++
+      s"outputFunction=${outputFunction}"
+
+  // Parikh SDST に変換する
+  def toSDST: SimpleStreamingDataStringTransducer2 = {
+    // まず仮定のチェックとその witness を計算する。
+    // characteristics(l) = (prior, posterior)
+    // prior, posteriror はそれぞれ組 (states, image, guard) で、
+    // states に至る遷移のガードが guard かつ Parikh 像の l 成分が image.
+    val characteristics =
+      labels.map { (lab: ParikhLabel) =>
+        // 状態空間をガードと Parikh 像で分類する
+        val grp = transitions.groupMap(t => (guardOf(t)(lab), imageOf(t)(lab)))(dstOf).toList
+        // ちょうど2つの類がある
+        require(grp.length == 2) // TODO: mitigate to grp.length <= 2
+        val (prior @ ((priGuard, priImage), priStates), posterior @ ((postGuard, postImage), postStates)) = {
+          var List(prior @ (_, priQs), posterior) = grp
+          if (!priQs(initialState)) {
+            val tmp = prior
+            prior = posterior
+            posterior = tmp
+          }
+          (prior, posterior)
+        }
+        // 確かに分割である
+        require((priStates | postStates) == states && (priStates & postStates).isEmpty)
+        // 戻る遷移はない
+        require(!transitions.exists(t => priStates(dstOf(t)) && postStates(srcOf(t))))
+        // 初めは±1、やがて変えなくなる
+        require(math.abs(priImage) == 1)
+        require(postImage == 0)
+        // 不等号の形を確認
+        val (priComparator, priBoundary)   = priGuard
+        val (postComparator, postBoundary) = postGuard
+        require(if (priImage > 0) then priComparator.isLess else !priComparator.isLess)
+        require(priComparator.dual == postComparator)
+        // 境界値は一致する
+        require(priBoundary == postBoundary)
+        lab -> ((priStates, priImage, priGuard), (postStates, postImage, postGuard))
+      }.toMap
+
+    enum Label {
+      case P(x: ParikhLabel) // ParikhLabel のコピー
+      case S                 // どの状態で終わったかを表す
+    }
+    val newLabels: Set[Label] = this.labels.map(Label.P(_)) + Label.S
+    val stateNumbering        = states.zipWithIndex.toMap
+    // Parikh 像を非負にする
+    // TODO: types
+    val edges = this.transitions
+      .map[(State, CurrOrDelim, expresso.Update[ListVar, CurrOrDelim], Map[Label, Int], State)] { e =>
+        val src = srcOf(e)
+        val absImage =
+          imageOf(e).map { case (l, n) => Label.P(l) -> n.abs } + (Label.S -> 0)
+        (src, curr, updateOf(e), absImage, dstOf(e))
+      }
+    // 状態の検出を加える
+    val outGraph = outputFunction.map { case (state, w) =>
+      val stateVec = newLabels.map(_ -> 0).toMap + (Label.S -> stateNumbering(state))
+      val spec     = expresso.Cupstar.lift1[ListVar, CurrOrDelim](w)
+      (state, spec, stateVec)
+    }.toSet
+    val formulae = {
+      val sugar = new PresburgerFormulaSugarForParikhAutomaton[Param, Label]
+      import sugar._
+      Monoid.foldMapWith(Presburger.conjunctiveMonoid)(labels) { lab =>
+        val ((priorStates, priorImage, (priorInequal, boundary)), (postStates, _, _)) =
+          characteristics(lab)
+        val increasing = priorImage > 0
+        val strict     = priorInequal == Inequal.Gt
+        require(!increasing && strict) // TODO: とりあえず動かすための仮定
+        val initialLab = initialParikhImage(lab).injected
+        val labDiff    = label(Label.P(lab))
+        val endedInPrior = Monoid.foldMapWith(Presburger.disjunctiveMonoid)(priorStates) { state =>
+          label(Label.S) === stateNumbering(state)
+        }
+        val resultVal = {
+          val op = (e1: Term, e2: Term) =>
+            if (increasing) Presburger.Add(Seq[Term](e1, e2))
+            else Presburger.Sub(e1, e2) // NOTE: 仮定より今はこれ
+          op(initialLab, labDiff)
+        }
+        val comp: (sugar.Term, sugar.Term) => sugar.Formula =
+          if (increasing && strict) Presburger.Lt(_, _)
+          else if (increasing && !strict) Presburger.Le(_, _)
+          else if (!increasing && strict) Presburger.Gt(_, _) // NOTE: 仮定より今はこれ
+          else Presburger.Ge(_, _)
+        // TODO: !strict だったら boundary に ±1 がある
+        (labDiff === 0 && !comp(initialLab, boundary.injected)) || // 初めからガードが成り立たない
+        (resultVal === boundary.injected) ||                       // 初めは prior にいるが、いつか prior から出る
+        (endedInPrior && (comp(resultVal, boundary.injected)))     // ずっと prior にいる
+      }
+    }
+    val sst = ParikhSST[State, CurrOrDelim, CurrOrDelim, ListVar, Label, Param](
+      states = states,
+      inSet = Set(CurrOrDelim.curr),
+      xs = listVars,
+      ls = newLabels,
+      is = params,
+      edges = edges,
+      q0 = initialState,
+      outGraph = outGraph,
+      acceptFormulas = Seq(formulae)
+    )
+    SimpleStreamingDataStringTransducer2[State, ListVar, Label](sst)
+  }
+
+}
+
+// TODO types
+object GuardedSDST {
+  private class GuardedSDSTImpl[Q, X, L](
+      val states: Set[Q],
+      val initialState: Q,
+      val listVars: Set[X],
+      val labels: Set[L],
+      val params: Set[String],
+      val initialParikhImage: Map[L, Presburger.Term[String]],
+      val transitions: Set[
+        (
+            Q,
+            Map[L, (Inequal, Presburger.Term[String])],
+            expresso.Update[X, CurrOrDelim.curr.type],
+            Map[L, Int],
+            Q
+        )
+      ],
+      val outputFunction: Map[Q, Seq[X]],
+  ) extends GuardedSDST {
+    type State       = Q
+    type ListVar     = X
+    type ParikhLabel = L
+  }
+  def apply[Q, X, L](
+      states: Set[Q],
+      initialState: Q,
+      listVars: Set[X],
+      labels: Set[L],
+      params: Set[String],
+      initialParikhImage: Map[L, Presburger.Term[String]],
+      transitions: Set[
+        (
+            Q,
+            Map[L, (Inequal, Presburger.Term[String])],
+            expresso.Update[X, CurrOrDelim.curr.type],
+            Map[L, Int],
+            Q
+        )
+      ],
+      outputFunction: Map[Q, Seq[X]],
+  ): GuardedSDST {
+    type State       = Q
+    type ListVar     = X
+    type ParikhLabel = L
+  } = new GuardedSDSTImpl(
+    states,
+    initialState,
+    listVars,
+    labels,
+    params,
+    initialParikhImage,
+    transitions,
+    outputFunction
   )
 }

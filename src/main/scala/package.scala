@@ -25,6 +25,8 @@ package object expresso {
         case (x @ Cop1(_), (a1, a2))  => (x.copy :: a1, x.copy :: a2)
         case (Cop2((a, b)), (a1, a2)) => (Cop2(a) :: a1, Cop2(b) :: a2)
       }
+    def lift1[A, B](xs: Seq[A]): Cupstar[A, B] =
+      xs.map(Cop1.apply[A, B]).toList
   }
 
   object Update {

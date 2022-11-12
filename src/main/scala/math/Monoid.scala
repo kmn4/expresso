@@ -51,4 +51,7 @@ object Monoid {
         }
     }
   def fold[M](ms: IterableOnce[M])(implicit monoid: Monoid[M]): M = ms.iterator.fold(monoid.unit)(monoid.combine)
+
+  def foldMap[A, M: Monoid](xs: IterableOnce[A])(f: A => M): M                = fold(xs.map(f))
+  def foldMapWith[A, M](monoid: Monoid[M])(xs: IterableOnce[A])(f: A => M): M = foldMap(xs)(f)(monoid)
 }
