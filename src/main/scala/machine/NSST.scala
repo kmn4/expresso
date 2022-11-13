@@ -29,11 +29,11 @@ case class NSST[Q, A, B, X](
   def transduce(w: Seq[A]): Set[List[B]] =
     transition(Set(q0), w.toList).flatMap { case (q, m) => outputAt(q, m) }
 
-  def isCopyless: Boolean = {
-    val e = edges.forall { case (_, _, m, _) => isCopylessUpdate(m) }
-    val f = outF.forall { case (_, s)        => s.forall(isCopylessOutput(_)) }
-    e && f
-  }
+  def copyfulEdge = edges.find { case (_, _, m, _) => !isCopylessUpdate(m) }
+  def copyfulOutF = outF.find { case (_, s)        => s.exists(!isCopylessOutput(_)) }
+  def copyfulWitness = copyfulEdge ++ copyfulOutF
+  def copyfulWitnessOpt = (copyfulEdge ++ copyfulOutF).headOption
+  def isCopyless: Boolean = copyfulWitness.isEmpty
 
   def isEmpty: Boolean = {
     val reachables = closure(
@@ -67,12 +67,8 @@ case class NSST[Q, A, B, X](
 
   /** Construct NSST that transduce w to that.transduce(this.transduce(w)). */
   def compose[R, C, Y](that: NSST[R, B, C, Y]): NSST[Int, A, C, Int] = {
-    if (!this.isCopyless) {
-      throw new Exception(s"Tried to compose NSST, but first NSST was copyfull: ${this.edges}")
-    }
-    if (!that.isCopyless) {
-      throw new Exception(s"Tried to compose NSST, but second NSST was copyfull: ${that.edges}")
-    }
+    this.copyfulWitnessOpt map (w => throw new Exception(s"Tried to compose NSST, but first NSST was copyfull: ${w}"))
+    that.copyfulWitnessOpt map (w => throw new Exception(s"Tried to compose NSST, but second NSST was copyfull: ${w}"))
     val p = this.toParikhSST[Nothing, Nothing] compose that.toParikhSST[Nothing, Nothing]
     NSST(
       p.states,

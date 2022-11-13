@@ -1,5 +1,7 @@
 package com.github.kmn4.expresso.machine
 
+import collection.mutable.{Map as MMap, Set as MSet}
+
 import com.github.kmn4.expresso
 import com.github.kmn4.expresso.Cupstar
 import com.github.kmn4.expresso.math.Monoid
@@ -97,7 +99,7 @@ abstract class SimpleStreamingDataStringTransducer2 {
   val ListVar                               = expresso.math.Cop1
   val Character                             = expresso.math.Cop2
 
-  private val _edgesTo: collection.mutable.Map[State, Set[Edge]] = collection.mutable.Map()
+  private val _edgesTo: MMap[State, Set[Edge]] = MMap()
   def edgesTo(q: State): Set[Edge] = _edgesTo.getOrElseUpdate(q, transitions.filter(dstOf(_) == q))
 
   // 入力がデータ (resp. #) な遷移の更新では curr (resp. #) しか使わない。
@@ -375,7 +377,7 @@ object SimpleStreamingDataStringTransducer2 {
   // F'(..) = xin xout, xout = X.head
   // q in dom(F), (operand, q) -[#/xout := F(q)]-> (operand+1, q0)
 
-  type SSDT = SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int }
+  type SSDT = SimpleStreamingDataStringTransducer2
   val SSDT = SimpleStreamingDataStringTransducer2
 
   def liftDelim(
@@ -397,7 +399,8 @@ object SimpleStreamingDataStringTransducer2 {
     val edges = {
       type ListSpec = expresso.Cupstar[ListVar, CurrOrDelim]
       type Update   = expresso.Update[ListVar, CurrOrDelim]
-      val idUpdate: Update              = listVars.map(x => x -> List(Cop1(x))).toMap
+      val idUpdate: Update              = expresso.Update.identity(listVars)
+      val mtUpdate: Update              = expresso.Update.reset(listVars)
       def add(sym: CurrOrDelim): Update = Map(xin -> List(Cop1(xin), Cop2(sym)))
       def liftSpec(output: t.ListSpec): ListSpec = output.map {
         case Cop1(x)   => Cop1(Option(x))
@@ -405,8 +408,7 @@ object SimpleStreamingDataStringTransducer2 {
       }
       def liftUpdate(update: t.Update): Update =
         for ((x, w) <- update) yield (Option(x) -> liftSpec(w))
-      def setXout(output: t.ListSpec): Update =
-        idUpdate ++ Map(xout -> liftSpec(output))
+      def setXout(output: t.ListSpec): Update = mtUpdate ++ Map(xout -> liftSpec(output))
       // i != operand, (i, q0) -[d/add, 0]-> (i, q0)
       // i != operand, (i, q0) -[#/add, 0]-> (i+1, q0)
       val notOperand = for {
@@ -485,7 +487,7 @@ object SimpleStreamingDataStringTransducer2 {
         states = states,
         inSet = Set(curr, delim),
         xs = listVars,
-        ls = Set[Int](),
+        ls = Set(),
         is = Set(),
         edges = edges,
         q0 = 0,
@@ -513,6 +515,7 @@ private class PresSugar[X] {
   type Var     = Presburger.Var[X]
   type Term    = Presburger.Term[X]
   type Formula = Presburger.Formula[X]
+  val Var                          = Presburger.Var
   implicit def const(i: Int): Term = Const(i)
   implicit class TermOps(t: Term) {
     def +(s: Term): Term      = Add(Seq(t, s))
@@ -635,15 +638,19 @@ object SemanticsSpecs {
   import SDSTSemantics._
 
   def take(machine: SimpleStreamingDataStringTransducer2, nTake: String) = {
-    assert(transduce(machine, Map(nTake -> 2), seq(1, 2, 3)) == seq(1, 2))
-    assert(transduce(machine, Map(nTake -> -2), seq(1, 2, 3)) == seq())
-    assert(transduce(machine, Map(nTake -> 5), seq(1, 2, 3)) == seq(1, 2, 3))
+    for (i <- -10 to 10) {
+      val expected = seq(List(1, 2, 3).take(i): _*)
+      val result   = transduce(machine, Map(nTake -> i), seq(1, 2, 3))
+      assert(expected == result, s"${i}: got ${result} but ${expected} expected")
+    }
   }
 
-  def drop(machine: SimpleStreamingDataStringTransducer2, nTake: String) = {
-    assert(transduce(machine, Map(nTake -> 2), seq(1, 2, 3)) == seq(3))
-    assert(transduce(machine, Map(nTake -> -2), seq(1, 2, 3)) == seq(1, 2, 3))
-    assert(transduce(machine, Map(nTake -> 5), seq(1, 2, 3)) == seq())
+  def drop(machine: SimpleStreamingDataStringTransducer2, nDrop: String) = {
+    for (i <- -10 to 10) {
+      val expected = seq(List(1, 2, 3).drop(i): _*)
+      val result   = transduce(machine, Map(nDrop -> i), seq(1, 2, 3))
+      assert(expected == result, s"${i}: got ${result} but ${expected} expected")
+    }
   }
 
   def takeEven(machine: SimpleStreamingDataStringTransducer2) = {
@@ -687,7 +694,7 @@ object DataStringTransducerExamples extends App {
     new StringGenerator(Set("i", "b", "e"))
   val pref   = prefix(i)
   val suff   = suffix(i)
-  val theory = new DataStringTheory2
+  val theory = DataStringTheory2
   import theory.composeLeft
   val comp = {
     composeLeft(
@@ -797,9 +804,11 @@ private class StringGenerator(private var forbidden: Set[String]) {
   }
 }
 
-class DataStringTheory2(implicit gen: StringGenerator) {
-  type SSDT = SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int }
-  val SSDT = SimpleStreamingDataStringTransducer2
+object DataStringTheory2 {
+  private type SSDT = SimpleStreamingDataStringTransducer2
+  private val SSDT = SimpleStreamingDataStringTransducer2
+
+  /** t1 をしてから t2 をする合成 */
   def compose(t1: SSDT, t2: SSDT): SSDT =
     SSDT(t1.internalSST compose t2.internalSST)
   def composeLeft(transducers: SSDT*): SSDT =
@@ -862,18 +871,25 @@ class DataStringTheory2(implicit gen: StringGenerator) {
       val Guess = Map
 
       // generate parameters
+      val gen           = StringGenerator(t1.intParams | t2.intParams)
       val j, p, isDelim = gen()
 
-      type Label = t.ParikhLabel
-      val lj                                          = t.internalSST.ls.maxOption.getOrElse(0) + 1
-      val lp                                          = lj + 1
-      val ld                                          = lj + 2
-      def Label(x: Label): Var[Either[String, Label]] = Var(Right(x))
-      def I(x: String): Var[Either[String, Label]]    = Var(Left(x))
+      enum Label                                   { case lj, lp, ld; case Wrap(x: t.ParikhLabel) }
+      implicit class InjLabel(self: t.ParikhLabel) { def injected: Label = Label.Wrap(self)       }
+      implicit class InjImage(self: t.ParikhImage) {
+        def injected: Map[Label, Int] = self.map { case (l, v) => l.injected -> v }
+      }
+      import Label.{lj, lp, ld}
+      // type Label = t.ParikhLabel
+      // val lj                                          = t.internalSST.ls.maxOption.getOrElse(0) + 1
+      // val lp                                          = lj + 1
+      // val ld                                          = lj + 2
+      def L(x: Label): Var[Either[String, Label]]  = Var(Right(x))
+      def I(x: String): Var[Either[String, Label]] = Var(Left(x))
 
       val labels    = Set(lj, lp, ld)
       val intParams = Set(j, p, isDelim)
-      val formula   = Label(lj) === I(j) && Label(lp) === I(p) && Label(ld) === I(isDelim)
+      val formula   = L(lj) === I(j) && L(lp) === I(p) && L(ld) === I(isDelim)
       val isInitial = (q: t.State, f: Guess) => t.initialStates(q) && !f.pGuessed
       lazy val finals: Set[((t.State, Guess), t.ParikhImage)] = t.outputRelation flatMap { case o =>
         val state      = t.stateOf(o)
@@ -897,7 +913,7 @@ class DataStringTheory2(implicit gen: StringGenerator) {
             val input  = t.inputOf(e)
             val image  = t.imageOf(e)
             def res: Iterable[(t.State, Map[Label, Int], Guess)] = prevGuesses(g, update) map { f =>
-              def res = (p, image ++ Map(lj -> e, lp -> c, ld -> (if (splittedAtDelim) 1 else 0)), f)
+              def res = (p, image.injected ++ Map(lj -> e, lp -> c, ld -> (if (splittedAtDelim) 1 else 0)), f)
               def e   = if (g.pGuessed) 0 else 1
               def c   = t.listVars.iterator.map(cIn).sum
               def cIn(x: t.ListVar): Int = g(x) match {
@@ -959,18 +975,28 @@ class DataStringTheory2(implicit gen: StringGenerator) {
           } yield hd +: ys
         }
 
+      // TODO: シュガーに移動する
+      def renameVars[X, Y](formulae: Seq[Presburger.Formula[X]])(
+          renamer: X => Y
+      ): Seq[Presburger.Formula[Y]] = formulae map (_.renameVars(renamer))
+      val injectedFormulae = renameVars(t.internalSST.acceptFormulas) {
+        case Left(x)  => Left(x)
+        case Right(x) => Right(x.injected)
+      }
+      val acceptFormulae = Seq(formula) ++ injectedFormulae
+
       val pa = SimplePA2.from(
         SimplePA2.ExtendedSyntax[(t.State, Guess), Label, String](
           states = states,
-          labels = labels ++ t.internalSST.ls,
+          labels = labels ++ t.internalSST.ls.map(_.injected),
           params = Set(j, p, isDelim) ++ t.internalSST.is,
           edges = edges,
           initialStates = states.filter { case (q, f) => isInitial(q, f) },
           acceptRelation = finals.map { case (q, v) =>
             val zeroVector = Map(lj -> 0, lp -> 0)
-            ((q, v ++ zeroVector))
+            ((q, v.injected ++ zeroVector))
           },
-          acceptFormulae = Seq(formula) ++ t.internalSST.acceptFormulas
+          acceptFormulae = acceptFormulae
         )
       )
       (pa, j, p, isDelim)
@@ -1060,7 +1086,7 @@ private enum Inequal extends Comparator {
   }
 }
 
-object InputFormat {
+private object InputFormat {
 
   enum ParamType { case Acc, Int, Inp }
 
@@ -1145,12 +1171,6 @@ object InputFormat {
 
   /// Top-level forms
 
-  // TODO: シグネチャの整数引数間で線形演算したものを定義に渡しても大丈夫かもしれない
-  // (defop (take-add n m l) (rec nil (+ n m) l))
-  // (defop (subseq beg len xs) (rec nil beg (+ beg len) xs))
-  // この場合はシグネチャの引数が SDST の Param,
-  // 相互再帰関数の引数が ParikhLabel に対応するため、
-  // より SDST に近い表現と言えるかも
   case class DefineOperation(
       signature: (String, Seq[String]),
       definition: (String, DefinitionArgs),
@@ -1167,11 +1187,78 @@ object InputFormat {
       intermidiateLists: Seq[String],
       outputList: String,
       body: Seq[ProgramStatement]
-  )
+  ) {
+    private val listNames        = Seq(inputList) ++ intermidiateLists ++ Seq(outputList)
+    private val nthListName      = listNames.zipWithIndex.toMap
+    private val definedListNames = body map { case Assignment(name, _) => name }
+    // 中間生成リストや出力リストとして指定された通りの順に、その値が定義される
+    require(((intermidiateLists ++ Seq(outputList)) zip definedListNames).forall(_ == _))
+    def makeSDST(
+        env: String => Seq[String] => SimpleStreamingDataStringTransducer2
+    ): SimpleStreamingDataStringTransducer2 = {
+      val delimitedStringTransducers: Seq[SimpleStreamingDataStringTransducer2] =
+        body.zipWithIndex map {
+          case (Assignment(definedVar, FunCall(funName, funArgs: Seq[String])), ithStatement) =>
+            val numReadStrings = 1 /* inputList */ + ithStatement
+            if (funName == "++") // TODO: 特別扱いされるべき関数が他にないか考える
+              SimpleStreamingDataStringTransducer2
+                .concatDelim(numReadStrings = numReadStrings, operands = funArgs map nthListName)
+            else {
+              val intArgs: Seq[String] = funArgs.init
+              val listInput: String    = funArgs.last
+              SimpleStreamingDataStringTransducer2.liftDelim(
+                env(funName)(intArgs),
+                numReadStrings = numReadStrings,
+                operand = nthListName(listInput)
+              )
+            }
+        }
+      // TODO: funArgs には length 関数を含む算術式も使いたい
+      val projection =
+        SimpleStreamingDataStringTransducer2
+          .projection(numReadStrings = listNames.length, operands = Seq(nthListName(outputList)))
+      val transducers = delimitedStringTransducers ++ Seq(projection)
+      DataStringTheory2.composeLeft(transducers: _*)
+    }
+  }
 
   case class DefineComposition(name: String, funcNames: Seq[String])
 
   case class CheckEquiv(name1: String, name2: String, assumptions: Seq[Assumption])
+
+  extension (description: InputFormat.DefineOperation) {
+    def toSDST(paramNames: String*) =
+      GuardedSDST_withShortcuts.fromInputFormat(description)(paramNames).shortcutsEliminatedByEmulation.toSDST
+  }
+
+}
+
+class Checker {
+
+  import InputFormat._
+
+  type Command = DefineOperation | DefineProgram | CheckEquiv
+
+  private val sdstScheme       = MMap.empty[String, Seq[String] => SimpleStreamingDataStringTransducer2]
+  private[machine] val sdstEnv = MMap.empty[String, SimpleStreamingDataStringTransducer2]
+
+  def eval(command: Command): Unit = command match {
+    case comm: DefineOperation => sdstScheme.addOne(comm.signature._1 -> (comm.toSDST _))
+    case comm: DefineProgram   => sdstEnv.addOne(comm.name -> comm.makeSDST(sdstScheme))
+    case comm: CheckEquiv      => checkEquiv(sdstEnv(comm.name1), sdstEnv(comm.name2), comm.assumptions)
+  }
+
+  private val theory = DataStringTheory2
+
+  def checkEquiv(
+      t1: SimpleStreamingDataStringTransducer2,
+      t2: SimpleStreamingDataStringTransducer2,
+      assumptions: Seq[Assumption]
+  ) = {
+    require(assumptions.isEmpty) // TODO: とりあえず動かすための仮定
+    if (theory.checkEquivalence(t1, t2)) println("equivalent")
+    else println("not equivalent")
+  }
 
 }
 
@@ -1231,11 +1318,6 @@ object InputFormatExamples extends App {
     )
   )
 
-  extension (description: InputFormat.DefineOperation) {
-    def toSDST(paramNames: String*) =
-      GuardedSDST_withShortcuts.fromInputFormat(description)(paramNames).shortcutsEliminatedByEmulation.toSDST
-  }
-
   SemanticsSpecs.take(take.toSDST("c"), "c")
 
   SemanticsSpecs.drop(drop.toSDST("c"), "c")
@@ -1264,20 +1346,46 @@ object InputFormatExamples extends App {
 
   SemanticsSpecs.takeEven(takeEven.toSDST())
 
+  val checker = new Checker
+  checker.eval(take)
+  checker.eval(drop)
+
   // (n: String) -> [a] -> [a]
   // "Simple Parikh SDST"
   val concatSplit = DefineProgram(
+    // (defprog concat-split
     name = "concat-split",
-    intParams = List("n"),
-    inputList = "inp",
-    intermidiateLists = List("x", "y"),
-    outputList = "z",
-    body = List(
-      Assignment("x", FunCall("take", Seq("n", "inp"))),
-      Assignment("y", FunCall("drop", Seq("n", "inp"))),
-      Assignment("z", FunCall("++", Seq("x", "y"))),
+    intParams = List("n"),                               // :param n
+    inputList = "inp",                                   // :input inp
+    intermidiateLists = List("x", "y"),                  // :inter x y
+    outputList = "z",                                    // :ouput z
+    body = List(                                         // :body
+      Assignment("x", FunCall("take", Seq("n", "inp"))), // (:= x (take n inp))
+      Assignment("y", FunCall("drop", Seq("n", "inp"))), // (:= y (drop n inp))
+      Assignment("z", FunCall("++", Seq("x", "y"))),     // (:= z (++ x y))
     )
   )
+
+  checker.eval(concatSplit)
+
+  val id = DefineProgram(
+    name = "identity",
+    intParams = Nil,
+    inputList = "x",
+    intermidiateLists = Nil,
+    outputList = "y",
+    body = List(Assignment("y", FunCall("++", Seq("x"))))
+  )
+
+  checker.eval(id)
+
+  val checkEquiv_concatSplit_identity = CheckEquiv(
+    name1 = "concat-split",
+    name2 = "identity",
+    assumptions = Nil
+  )
+
+  checker.eval(checkEquiv_concatSplit_identity)
 
   val checkEquiv_revTO_TOrev = CheckEquiv(
     name1 = "rev-to",
@@ -1285,6 +1393,7 @@ object InputFormatExamples extends App {
     assumptions =
       List(Assumption(Equal, Assumption.Mod(Assumption.Length, Assumption.Const(2)), Assumption.Const(1)))
   )
+
 }
 
 private case object restInp
@@ -1348,10 +1457,8 @@ private abstract class GuardedSDST_withShortcuts {
     val appendToRest = identityUpdate ++ appendToVariables[currPtr.type](restVars, Seq(currPtr))
 
     val additionalTransitions =
-      collection.mutable.Set
-        .empty[(NewState, Guard, expresso.Update[NewListVar, currPtr.type], ParikhImage, NewState)]
-    // TODO: これの値域に Wrap(Cop1(0)) がなぜか許されている
-    val additionalOutput = collection.mutable.Map.empty[NewState, Seq[NewListVar]]
+      MSet.empty[(NewState, Guard, expresso.Update[NewListVar, currPtr.type], ParikhImage, NewState)]
+    val additionalOutput = MMap.empty[NewState, Seq[NewListVar]]
     for (((state, guard, spec), d) <- orderedShortcuts.zipWithIndex) {
       val substitute: Seq[Cop[ListVar, currPtr.type | restInp.type]] => Seq[NewListVar] = { xs =>
         val cntCurr, cntRest = Counter(-1)
