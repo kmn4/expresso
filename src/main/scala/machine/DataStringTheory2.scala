@@ -633,7 +633,7 @@ object SDSTSemantics {
 
 }
 
-object SemanticsSpecs {
+private object SemanticsSpecs {
 
   import SDSTSemantics._
 
@@ -1491,7 +1491,10 @@ private abstract class GuardedSDST_withShortcuts {
     val newTransitions    = injectedTransitions ++ additionalTransitions
     val newOutputFunction = injectedOutputFunction ++ additionalOutput
 
+    val types = new GuardedTypes[NewState, NewListVar, ParikhLabel]
+
     GuardedSDST(
+      types,
       newStates,
       initialState.injected,
       newListVars,
@@ -1504,12 +1507,39 @@ private abstract class GuardedSDST_withShortcuts {
   }
 }
 
-object GuardedSDST_withShortcuts {
+private class GuardedTypes[Q, X, L] {
+
+  import CurrOrDelim.{curr as currPtr}
+
+  type State       = Q
+  type ListVar     = X
+  type ParikhLabel = L
+
+  type Param = String
+
+  type Update      = expresso.Update[ListVar, currPtr.type]
+  type ParikhImage = Map[ParikhLabel, Int] // 負でも良い
+  type ParamTerm   = Presburger.Term[Param]
+  type Guard       = Map[ParikhLabel, (Inequal, ParamTerm)]
+  type Transition  = (State, Guard, Update, ParikhImage, State)
+  type Shortcut    = (State, Guard, Cupstar[ListVar, currPtr.type | restInp.type])
+
+  type MachineWithoutShortcuts = GuardedSDST { type State = Q; type ListVar = X; type ParikhLabel = L }
+  type MachineWithShortcuts = GuardedSDST_withShortcuts {
+    type State = Q; type ListVar = X; type ParikhLabel = L
+  }
+
+}
+
+private object GuardedSDST_withShortcuts {
 
   def fromInputFormat(description: InputFormat.DefineOperation): Seq[String] => GuardedSDST_withShortcuts =
     (paramNames: Seq[String]) => {
       import InputFormat._
       import CurrOrDelim.{curr => currPtr}
+
+      val types = new GuardedTypes[String, Int, Int]
+
       val states                           = description.auxFnClauses.map(_.name).toSet
       val (initialState, definitionParams) = description.definition
       val (defNonInput, defInputList)      = definitionParams
@@ -1571,16 +1601,10 @@ object GuardedSDST_withShortcuts {
           case x: (Append | NilVal | String) => Right(cls.copy(_4 = x))
         }
       }
-      // TODO: types
-      def translateGuard(
-          intParams: Map[String, Int],
-          guard: InputFormat.Guard
-      ): Map[Int, (Inequal, Presburger.Term[String])] =
-        Map
-          .from(guard.conjuncts map { case GuardClause(name, comparator, threshold) =>
-            intParams(name) -> (comparator, translateArithExp(threshold))
-          })
-          .toMap
+      def translateGuard(intParams: Map[String, Int], guard: InputFormat.Guard): types.Guard =
+        Map.from(guard.conjuncts map { case GuardClause(name, comparator, threshold) =>
+          intParams(name) -> (comparator, translateArithExp(threshold))
+        })
       import expresso.math.{Cop, Cop1, Cop2}
       def translateListParam[A](special: PartialFunction[String, A], auxParams: String => Int)(
           x: String
@@ -1644,8 +1668,11 @@ object GuardedSDST_withShortcuts {
             nextName
           )
       })
-      GuardedSDST_withShortcuts[String, Int, Int](
-        GuardedSDST[String, Int, Int](
+
+      GuardedSDST_withShortcuts(
+        types,
+        GuardedSDST(
+          types,
           states,
           initialState,
           listVars,
@@ -1659,18 +1686,19 @@ object GuardedSDST_withShortcuts {
       )
     }
 
-  import CurrOrDelim.{curr as currPtr}
-
   private class GuardedSDST_withShortcuts_Impl[Q, X, L](
-      val sdst: GuardedSDST { type State = Q; type ListVar = X; type ParikhLabel = L },
-      val shortcuts: Set[(sdst.State, sdst.Guard, Cupstar[sdst.ListVar, currPtr.type | restInp.type])]
+      types: GuardedTypes[Q, X, L],
+      override val sdst: types.MachineWithoutShortcuts,
+      override val shortcuts: Set[types.Shortcut]
   ) extends GuardedSDST_withShortcuts
 
   def apply[Q, X, L](
-      sdst: GuardedSDST { type State = Q; type ListVar = X; type ParikhLabel = L },
-      shortcuts: Set[(sdst.State, sdst.Guard, Cupstar[sdst.ListVar, currPtr.type | restInp.type])]
+      types: GuardedTypes[Q, X, L],
+      sdst: types.MachineWithoutShortcuts,
+      shortcuts: Set[types.Shortcut],
   ): GuardedSDST_withShortcuts { type State = Q; type ListVar = X; type ParikhLabel = L } =
     GuardedSDST_withShortcuts_Impl(
+      types,
       sdst,
       shortcuts
     )
@@ -1836,52 +1864,38 @@ private abstract class GuardedSDST {
 
 }
 
-// TODO types
-object GuardedSDST {
+private object GuardedSDST {
   private class GuardedSDSTImpl[Q, X, L](
-      val states: Set[Q],
-      val initialState: Q,
-      val listVars: Set[X],
-      val labels: Set[L],
-      val params: Set[String],
-      val initialParikhImage: Map[L, Presburger.Term[String]],
-      val transitions: Set[
-        (
-            Q,
-            Map[L, (Inequal, Presburger.Term[String])],
-            expresso.Update[X, CurrOrDelim.curr.type],
-            Map[L, Int],
-            Q
-        )
-      ],
-      val outputFunction: Map[Q, Seq[X]],
+      types: GuardedTypes[Q, X, L],
+      override val states: Set[Q],
+      override val initialState: Q,
+      override val listVars: Set[X],
+      override val labels: Set[L],
+      override val params: Set[String],
+      override val initialParikhImage: Map[L, types.ParamTerm],
+      override val transitions: Set[types.Transition],
+      override val outputFunction: Map[Q, Seq[X]],
   ) extends GuardedSDST {
     type State       = Q
     type ListVar     = X
     type ParikhLabel = L
   }
   def apply[Q, X, L](
+      types: GuardedTypes[Q, X, L],
       states: Set[Q],
       initialState: Q,
       listVars: Set[X],
       labels: Set[L],
       params: Set[String],
-      initialParikhImage: Map[L, Presburger.Term[String]],
-      transitions: Set[
-        (
-            Q,
-            Map[L, (Inequal, Presburger.Term[String])],
-            expresso.Update[X, CurrOrDelim.curr.type],
-            Map[L, Int],
-            Q
-        )
-      ],
+      initialParikhImage: Map[L, types.ParamTerm],
+      transitions: Set[types.Transition],
       outputFunction: Map[Q, Seq[X]],
   ): GuardedSDST {
     type State       = Q
     type ListVar     = X
     type ParikhLabel = L
   } = new GuardedSDSTImpl(
+    types,
     states,
     initialState,
     listVars,
