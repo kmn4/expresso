@@ -15,8 +15,7 @@
   ((rec acc n nil) acc)    ; 入力リストが空
   ((rec acc n (cons x xs)) ; 入力リストが非空
    (cond ; 整数引数に関するガードによる場合分け
-    ((> n 0)  (rec (++ acc (x)) (- n 1) xs)) 
-    ;; ↑ (x) は関数呼び出しでなくシングルトンリストを意図している
+    ((> n 0)  (rec (++ acc (list x)) (- n 1) xs)) 
     ((<= n 0) acc))))
 
 (defop (identity l) (r nil l) :aux-args acc input
@@ -81,7 +80,7 @@
   :param n   ; 整数引数に名前をつける
   :input inp ; 入力リストに名前をつける
   :inter x y ; 中間生成物に名前をつける
-  :ouput z   ; 出力リストに名前をつける
+  :output z   ; 出力リストに名前をつける
   :body ; 定義本体
   (:= x (take n inp))
   (:= y (drop n inp))

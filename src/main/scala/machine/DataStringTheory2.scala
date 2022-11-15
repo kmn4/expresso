@@ -1231,21 +1231,366 @@ private object InputFormat {
       GuardedSDST_withShortcuts.fromInputFormat(description)(paramNames).shortcutsEliminatedByEmulation.toSDST
   }
 
+  type Command = DefineOperation | DefineProgram | CheckEquiv
+
 }
 
-class Checker {
+private object InputCodeExamples extends App {
+
+  val defop_take = """
+;; defop -- define operator
+;; 引数は整数が先で、最後は必ず入力リスト。
+;;      シグネチャ   定義
+(defop (take n l) (rec nil n l)
+  ;; 補助関数の引数の種類のリスト
+  ;; acc   - 蓄積 (accumulator) であり、SDST のリスト変数に対応する
+  ;; param - 整数パラメタ
+  ;; input - 入力リスト
+  :aux-args acc param input
+  :where ; 補助関数の定義たち
+  ;; 各節の car は関数名、引数名と、入力リストについてのパターンマッチを持つ。
+  ((rec acc n nil) acc)    ; 入力リストが空
+  ((rec acc n (cons x xs)) ; 入力リストが非空
+   (cond ; 整数引数に関するガードによる場合分け
+    ((> n 0)  (rec (++ acc (list x)) (- n 1) xs))
+    ((<= n 0) acc))))
+"""
+
+  val defop_drop = """
+(defop (drop n l) (rec nil n l)
+  :aux-args acc param input
+  :where
+  ((rec acc n nil) acc)
+  ((rec acc n (cons x xs))
+   (cond
+     ((> n 0) (rec acc (- n 1) xs))
+     ((<= n 0) (++ (list x) xs)))))
+"""
+
+  val defop_identity = """
+(defop (identity l) (r nil l) :aux-args acc input
+  :where
+  ((r acc nil) acc)
+  ((r acc (cons x xs)) (r (++ acc (list x)) xs)))
+"""
+
+  val defprog_concatSplit = """
+;; 直線プログラムの定義
+(defprog concat-split
+  :param n   ; 整数引数に名前をつける
+  :input inp ; 入力リストに名前をつける
+  :inter x y ; 中間生成物に名前をつける
+  :output z   ; 出力リストに名前をつける
+  :body ; 定義本体
+  (:= x (take n inp))
+  (:= y (drop n inp))
+  (:= z (++ x y)))
+"""
+
+  val defprog_identity = """
+(defprog identity
+  :param
+  :input x
+  :inter
+  :output y
+  :body
+  (:= y (identity x)))
+"""
+
+  val equiv_concatSplit_identity = """
+(equiv?! concat-split identity)
+"""
+
+  val script_01 =
+    defop_take ++ defop_drop ++ defop_identity ++ defprog_concatSplit ++ defprog_identity ++ equiv_concatSplit_identity
+
+}
+
+private object Reader {
+  def apply(string: String): Reader = new Reader(new java.io.StringReader(string))
 
   import InputFormat._
+  import smtlib.trees.Terms.{SExpr, SList, SSymbol, SKeyword, SNumeral}
 
-  type Command = DefineOperation | DefineProgram | CheckEquiv
+  type SListParser[+A] = Seq[SExpr] => Seq[(A, Seq[SExpr])]
+  private val ParserSeqImpl = LazyList
+
+  extension [A](self: SListParser[A]) {
+
+    def flatMap[B](that: A => SListParser[B]): SListParser[B] =
+      x => self(x) flatMap { case (a, rest) => that(a)(rest) }
+
+    def map[B](that: A => B): SListParser[B] = flatMap(x => unit(that(x)))
+
+    def |[B](that: SListParser[B]): SListParser[A | B]  = x => self(x) ++ that(x)
+    def *[B](that: SListParser[B]): SListParser[(A, B)] = for (x <- self; y <- that) yield (x, y)
+
+    def >>[B](that: SListParser[B]): SListParser[B] = flatMap(_ => that)
+
+    // 読み残しがないものを返す
+    def parse(x: Seq[SExpr]): Option[A] = self(x) find { case (y, rest) => rest.isEmpty } map (_._1)
+
+  }
+
+  val zero: SListParser[Nothing] = xs => ParserSeqImpl()
+
+  def unit[A](x: A): SListParser[A] = xs => ParserSeqImpl((x, xs))
+
+  val head: SListParser[SExpr] =
+    xs => if (xs.isEmpty) ParserSeqImpl.empty else ParserSeqImpl((xs.head, xs.tail))
+
+  def sat(cond: SExpr => Boolean): SListParser[SExpr] = head flatMap (x => if (cond(x)) unit(x) else zero)
+
+  def lift[A](f: PartialFunction[SExpr, A]): SListParser[A] = for {
+    x <- sat(f.isDefinedAt(_))
+  } yield f(x)
+
+  def list[A](contents: SListParser[A]): SListParser[A] = xs => {
+    val unwrap = lift { case SList(xs) => xs }
+    for {
+      (sexprs, rest) <- unwrap(xs)
+      x              <- contents.parse(sexprs)
+    } yield (x, rest)
+  }
+
+  def constSymbol(name: String): SListParser[Unit] = lift { case SSymbol(`name`) => () }
+
+  val symbol: SListParser[String] = lift { case SSymbol(name) => name }
+
+  def unionMap[A, B](spec: A*)(f: A => SListParser[B]): SListParser[B] = spec map f reduce (_ | _)
+
+  def reserved[A](mapping: (String, A)*): SListParser[A] =
+    unionMap(mapping: _*) { case (name, value) => constSymbol(name) >> unit(value) }
+
+  val nil: SListParser[NilVal] = reserved("nil" -> NilVal)
+
+  val numeral: SListParser[BigInt] = lift { case SNumeral(x) => x }
+
+  val int: SListParser[Int] = numeral map { value =>
+    require(value.isValidInt)
+    value.toInt
+  }
+
+  def funcall[A](funName: String)(arguments: SListParser[A]): SListParser[A] =
+    list(constSymbol(funName) >> arguments)
+
+  val arith: SListParser[ArithExp] = {
+    val variable = symbol map (name => ArithExp.Var(name))
+    val const    = int map ArithExp.Const.apply
+    val bop = unionMap(
+      "+"   -> ArithExp.Add.apply,
+      "-"   -> ArithExp.Sub.apply,
+      "*"   -> ArithExp.Mul.apply,
+      "mod" -> ArithExp.Mod.apply,
+    ) { case (op, construct) => funcall(op)((arith * arith) map (construct(_, _))) }
+    variable | const | bop
+  }
+
+  def many1[A](p: SListParser[A]): SListParser[Seq[A]] = for {
+    x  <- p
+    xs <- many(p)
+  } yield (x +: xs)
+
+  def many[A](p: SListParser[A]): SListParser[Seq[A]] = many1(p) | unit(Nil)
+
+  def keyword(name: String): SListParser[Unit] = lift { case SKeyword(`name`) => () }
+
+  def keywordArgs[A](keywordName: String)(p: SListParser[A]): SListParser[A] = keyword(keywordName) >> p
+
+  val auxFnType: SListParser[ParamType] =
+    reserved("acc" -> ParamType.Acc, "param" -> ParamType.Int, "input" -> ParamType.Inp)
+
+  def flatMany[A](p: SListParser[Seq[A]]): SListParser[Seq[A]] = many(p) map (_.flatten)
+
+  // TODO: "++" の引数の nil も空列とみなす場合、ここも修正する
+  // TODO: パーサのレベルで (++ acc (list x)) を Append(acc, x) にするのは少し変
+  val append: SListParser[Append] = {
+    val listCall   = funcall("list")(many(symbol))
+    val manySymbol = many(symbol)
+    val operands = many(listCall | symbol) map { seq =>
+      seq.foldRight(List.empty[String]) {
+        case (x: String, acc)       => x :: acc
+        case (xs: Seq[String], acc) => xs ++: acc
+      }
+    }
+    funcall("++")(operands map Append.apply)
+  }
+
+  // type ArgExp = Append | NilVal | Increment | String
+  val auxFunCall: SListParser[FunCall] = {
+    val increment: SListParser[Increment] = {
+      val plus  = funcall("+")((symbol * int) map { case (name, value) => (Sign.Plus, name, value) })
+      val minus = funcall("-")((symbol * int) map { case (name, value) => (Sign.Minus, name, value) })
+      plus | minus
+    }
+    val arg = append | nil | symbol | increment
+    list(for {
+      name <- symbol
+      args <- many(arg)
+    } yield FunCall(name, args))
+  }
+
+  type AuxFnBody = Append | NilVal | String | FunCall // TODO: InputFormat に移動
+  val pattern: SListParser[(String, AuxFnParams)] = list {
+    val listPattern =
+      reserved("nil" -> ListPattern.Nil) | funcall("cons")((symbol * symbol) map ListPattern.Cons.apply)
+    for {
+      name      <- symbol
+      auxParams <- many(symbol)
+      lpat      <- listPattern
+    } yield (name, (auxParams, lpat))
+  }
+  // NOTE: "++" を特別扱いしたいので append を優先する
+  val auxFnBody: SListParser[AuxFnBody]             = nil | symbol | append | auxFunCall
+  val noGuard: SListParser[Seq[(Guard, AuxFnBody)]] = auxFnBody map NoGuard.apply
+  val guard: SListParser[Guard] = {
+    val clause = unionMap(">" -> Inequal.Gt, ">=" -> Inequal.Ge, "<" -> Inequal.Lt, "<=" -> Inequal.Le) {
+      case (op, ineq) =>
+        funcall(op)((symbol * arith) map { case (name, threshold) => GuardClause(name, ineq, threshold) })
+    }
+    val and = funcall("and")(many(clause))
+    (and | (clause map (x => Seq(x)))) map Guard.apply
+  }
+  val condCase: SListParser[(Guard, AuxFnBody)]       = list(guard * auxFnBody)
+  val caseSplit: SListParser[Seq[(Guard, AuxFnBody)]] = funcall("cond")(many(condCase))
+  val auxFnClause: SListParser[AuxFnClause] = {
+    // for-式で書くと、「`foreach` が無い」と怒られる
+    list {
+      pattern flatMap { case (name, params) =>
+        (noGuard | caseSplit) map { body =>
+          AuxFnClause(name, params, body)
+        }
+      }
+    }
+  }
+
+  val assignment: SListParser[Assignment] = list(for {
+    _   <- keyword("=")
+    lhs <- symbol
+    rhs <- auxFunCall
+  } yield Assignment(lhs, rhs))
+
+  // TODO: キーワード引数を渡す順番は交換可能であるようにする
+
+  val signature = list {
+    for {
+      name   <- symbol
+      params <- many(symbol)
+    } yield (name, params)
+  }
+
+  val definition = list {
+    for {
+      name      <- symbol
+      auxArgs   <- many(nil | arith)
+      inputList <- symbol
+    } yield (name, (auxArgs, inputList))
+  }
+
+  val defop: SListParser[Command] = list {
+    for {
+      _            <- constSymbol("defop")
+      sig          <- signature
+      dfn          <- definition
+      auxFnArgs    <- keywordArgs("aux-args")(many(auxFnType))
+      auxFnClauses <- keywordArgs("where")(many(auxFnClause))
+    } yield DefineOperation(sig, dfn, auxFnArgs, auxFnClauses)
+  }
+
+  val defprog: SListParser[Command] = list {
+    for {
+      _      <- constSymbol("defprog")
+      name   <- symbol
+      params <- keywordArgs("param")(many(symbol))
+      input  <- keywordArgs("input")(symbol)
+      inter  <- keywordArgs("inter")(many(symbol))
+      output <- keywordArgs("output")(symbol)
+      body   <- keywordArgs("body")(many(assignment))
+    } yield DefineProgram(name, params, input, inter, output, body)
+  }
+
+  val equiv: SListParser[Command] = list {
+    for {
+      _     <- constSymbol("equiv?!")
+      name1 <- symbol
+      name2 <- symbol
+    } yield CheckEquiv(name1, name2, Nil) // TODO: とりあえず動かすため assumption は Nil
+  }
+
+  def read[A](p: SListParser[A])(sexpr: SExpr): Option[A] = p.parse(ParserSeqImpl(sexpr))
+
+  val readCommand: SExpr => Option[Command] = read(defop | defprog | equiv)
+
+}
+
+private class Reader(private val reader: java.io.Reader) {
+
+  import InputFormat.Command
+  import smtlib.parser.ParserCommon
+  import smtlib.lexer.{Lexer, Tokens}
+  import reflect.Selectable.reflectiveSelectable
+
+  private class SExprParser(val lexer: Lexer) extends ParserCommon {
+    def current = peekToken
+  }
+
+  private val parser = new SExprParser(new Lexer(reader))
+
+  // private def readSExpr = parser.parseSExpr
+  private def readSExpr = Option.when(parser.current != null)(parser.parseSExpr)
+
+  // 失敗したら例外を投げる
+  def apply(): Option[Command] = readSExpr map (x => Reader.readCommand(x).get)
+
+}
+
+private object ReaderExamples extends App {
+
+  export Reader._
+
+  import InputCodeExamples._
+  import smtlib.parser.ParserCommon
+  import smtlib.lexer.Lexer
+
+  def parseSExprInString(w: String) = {
+    val reader = new java.io.StringReader(w)
+    val parser = new ParserCommon { val lexer = new Lexer(reader) }
+    parser.parseSExpr
+  }
+
+  def readInString[A](p: SListParser[A])(code: String): Option[A] = read(p)(parseSExprInString(code))
+
+  def readAndPrint[A](p: SListParser[A])(code: String): Unit = {
+    println(";;; read")
+    println(code)
+    println(";;; result")
+    println(readInString(p)(code))
+  }
+
+  readAndPrint(defop)(code = defop_take)
+  readAndPrint(defop)(code = defop_drop)
+  readAndPrint(defop)(code = defop_identity)
+  readAndPrint(defprog)(defprog_concatSplit)
+  readAndPrint(equiv)(equiv_concatSplit_identity)
+
+}
+
+private class Evaluator {
+
+  import InputFormat._
 
   private val sdstScheme       = MMap.empty[String, Seq[String] => SimpleStreamingDataStringTransducer2]
   private[machine] val sdstEnv = MMap.empty[String, SimpleStreamingDataStringTransducer2]
 
-  def eval(command: Command): Unit = command match {
-    case comm: DefineOperation => sdstScheme.addOne(comm.signature._1 -> (comm.toSDST _))
-    case comm: DefineProgram   => sdstEnv.addOne(comm.name -> comm.makeSDST(sdstScheme))
-    case comm: CheckEquiv      => checkEquiv(sdstEnv(comm.name1), sdstEnv(comm.name2), comm.assumptions)
+  def apply(command: Command): Any = command match {
+    case comm: DefineOperation =>
+      val name = comm.signature._1
+      sdstScheme.addOne(name -> (comm.toSDST _))
+      s"defop $name"
+    case comm: DefineProgram =>
+      sdstEnv.addOne(comm.name -> comm.makeSDST(sdstScheme))
+      s"defprog ${comm.name}"
+    case comm: CheckEquiv => checkEquiv(sdstEnv(comm.name1), sdstEnv(comm.name2), comm.assumptions)
   }
 
   private val theory = DataStringTheory2
@@ -1262,7 +1607,29 @@ class Checker {
 
 }
 
-object InputFormatExamples extends App {
+private class REPL(reader: java.io.Reader) {
+
+  private val read = new Reader(reader)
+  private val eval = new Evaluator
+
+  def interpretOne(): Option[Unit] = read() map eval.apply map println
+
+  def interpretAll(): Unit = interpretOne() foreach (_ => interpretAll())
+
+}
+
+private object REPL {
+  def apply(w: String): REPL               = new REPL(new java.io.StringReader(w))
+  def apply(file: java.io.File): REPL      = new REPL(new java.io.FileReader(file))
+  def apply(is: java.io.InputStream): REPL = new REPL(new java.io.InputStreamReader(is))
+}
+
+private object REPLExamples extends App {
+  import InputCodeExamples._
+  REPL(script_01).interpretAll()
+}
+
+private object InputFormatExamples extends App {
   import InputFormat._
   // ($n: Int) -> [a] -> [a] -- $n は名前が入る穴
   // "String => Simple SDST"
@@ -1346,9 +1713,9 @@ object InputFormatExamples extends App {
 
   SemanticsSpecs.takeEven(takeEven.toSDST())
 
-  val checker = new Checker
-  checker.eval(take)
-  checker.eval(drop)
+  val eval = new Evaluator
+  eval(take)
+  eval(drop)
 
   // (n: String) -> [a] -> [a]
   // "Simple Parikh SDST"
@@ -1366,7 +1733,7 @@ object InputFormatExamples extends App {
     )
   )
 
-  checker.eval(concatSplit)
+  eval(concatSplit)
 
   val id = DefineProgram(
     name = "identity",
@@ -1377,7 +1744,7 @@ object InputFormatExamples extends App {
     body = List(Assignment("y", FunCall("++", Seq("x"))))
   )
 
-  checker.eval(id)
+  eval(id)
 
   val checkEquiv_concatSplit_identity = CheckEquiv(
     name1 = "concat-split",
@@ -1385,7 +1752,7 @@ object InputFormatExamples extends App {
     assumptions = Nil
   )
 
-  checker.eval(checkEquiv_concatSplit_identity)
+  eval(checkEquiv_concatSplit_identity)
 
   val checkEquiv_revTO_TOrev = CheckEquiv(
     name1 = "rev-to",
