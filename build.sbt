@@ -32,5 +32,8 @@ Compile / console / scalacOptions --= Seq(
 fork in run          := true
 fork in Test         := true
 cancelable in Global := true
-test in assembly     := {}
+
+assembly / test      := {}
+assembly / mainClass := Some("com.github.kmn4.expresso.machine.Eqlisp")
+
 run / javaOptions += "-Xss8m"

@@ -1624,6 +1624,20 @@ private object REPL {
   def apply(is: java.io.InputStream): REPL = new REPL(new java.io.InputStreamReader(is))
 }
 
+import com.monovore.decline
+
+object Eqlisp
+    extends decline.CommandApp(
+      name = "eqlisp",
+      header = "decide equivalence of list programs",
+      main = {
+        import decline._
+        val inputStream: Opts[java.io.InputStream] =
+          Opts.apply(System.in)
+        inputStream map (is => REPL(is).interpretAll())
+      }
+    )
+
 private object REPLExamples extends App {
   import InputCodeExamples._
   REPL(script_01).interpretAll()
