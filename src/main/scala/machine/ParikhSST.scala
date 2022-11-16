@@ -503,8 +503,16 @@ case class ParikhSST[Q, A, B, X, L, I](
     }
   }
 
-  def compose[R, C, Y, K](that: ParikhSST[R, B, C, Y, K, I]): ParikhSST[Int, A, C, Int, Int, I] =
+  def compose[R, C, Y, K](that: ParikhSST[R, B, C, Y, K, I]): ParikhSST[Int, A, C, Int, Int, I] = {
+    (sst.copyfulWitnessOpt, that.sst.copyfulWitnessOpt) match {
+      case (Some(w), _) =>
+        throw new IllegalArgumentException("tried to compose PSSTs, but the first one was copyful: ${w}")
+      case (_, Some(w)) =>
+        throw new IllegalArgumentException("tried to compose PSSTs, but the second one was copyful: ${w}")
+      case _ => ()
+    }
     andThen(that).renamed.removeRedundantVars
+  }
 
   def toLogVectorEpsNFT: ENFT[Option[Q], A, Map[L, Int]] = {
     implicit val mon: Monoid[ParikhSST.ParikhUpdate[L]] = Monoid.vectorMonoid(ls)
