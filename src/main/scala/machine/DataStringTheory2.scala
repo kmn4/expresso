@@ -6,13 +6,7 @@ import com.github.kmn4.expresso
 import com.github.kmn4.expresso.Cupstar
 import com.github.kmn4.expresso.math.Monoid
 import com.github.kmn4.expresso.math.Presburger
-import com.github.kmn4.expresso.math.Presburger.{Var, Formula => PresFormula}
 import com.github.kmn4.expresso.math.{Cop1, Cop2, Cop}
-import com.github.kmn4.expresso.math.Presburger.Add
-import com.github.kmn4.expresso.math.Presburger.Const
-import com.github.kmn4.expresso.math.Presburger.Mod
-import com.github.kmn4.expresso.math.Presburger.Mult
-import com.github.kmn4.expresso.math.Presburger.Sub
 
 enum CurrOrDelim { case curr, delim }
 
@@ -179,7 +173,6 @@ object SimpleStreamingDataStringTransducer2 {
     val listVar                                 = 0
     val labels @ Seq(seeked, taken, input)      = sliceLabels
     val (edges, outGraph) = {
-      import expresso.math.{Cop, Cop1, Cop2}
       type Update = Map[Int, List[Cop[Int, CurrOrDelim]]]
       val id: Update  = Map(listVar -> List(Cop1(listVar)))
       val add: Update = Map(listVar -> List(Cop1(listVar), Cop2(curr)))
@@ -241,104 +234,13 @@ object SimpleStreamingDataStringTransducer2 {
     SimpleStreamingDataStringTransducer2(internal)
   }
 
-  def sliceConstB(
-      begin: Int,
-      end: String
-  )(implicit gen: StringGenerator): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = {
-    val b        = gen()
-    val t        = slice(b, end)
-    val formulae = t.internalSST.acceptFormulas
-    val newFormula = {
-      import expresso.math.Presburger.Sugar._
-      Var(Left(b): Either[String, Int]) === const(begin)
-    }
-    SimpleStreamingDataStringTransducer2(t.internalSST.copy(acceptFormulas = formulae :+ newFormula))
-  }
-
-  def prefix(end: String)(implicit
-      gen: StringGenerator
-  ): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } =
-    sliceConstB(0, end)
-
-  def suffix(
-      begin: String
-  )(implicit gen: StringGenerator): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = {
-    val end      = gen()
-    val t        = slice(begin, end)
-    val formulae = t.internalSST.acceptFormulas
-    val newFormula = {
-      import expresso.math.Presburger.Sugar._
-      Var(Left(end): Either[String, Int]) === Var(Right(inputLabel))
-    }
-    SimpleStreamingDataStringTransducer2(t.internalSST.copy(acceptFormulas = formulae :+ newFormula))
-  }
-
-  // 特殊化されたバージョン
-
-  private def takeDropImpl(num: String, isTake: Boolean)(implicit
-      gen: StringGenerator
-  ): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = {
-    val states @ Seq(init, fin)    = Seq(0, 1)
-    val listVar                    = 0
-    val labels @ Seq(count, state) = Seq(0, 1)
-    val (edges, outGraph) = {
-      import expresso.math.{Cop, Cop1, Cop2}
-      type Update = Map[Int, List[Cop[Int, CurrOrDelim]]]
-      val id: Update  = Map(listVar -> List(Cop1(listVar)))
-      val add: Update = Map(listVar -> List(Cop1(listVar), Cop2(curr)))
-      def vec(ct: Int, st: Int): Map[Int, Int] =
-        Map(count -> ct, state -> st)
-      val edges = Set(
-        // to `init`
-        (init, if (isTake) add else id, vec(1, 0), init),
-        // to `fin`
-        (init, if (isTake) id else add, vec(0, 0), fin),
-        (fin, if (isTake) id else add, vec(0, 0), fin),
-      ).map { case (p, u, v, q) => (p, curr: CurrOrDelim, u, v, q) }
-      val outGraph = states.map(p => (p, id(listVar), vec(0, p))).toSet
-      (edges, outGraph)
-    }
-    val formula = {
-      val sugar = new PresburgerFormulaSugarForParikhAutomaton[String, Int]
-      import sugar._
-      val n: sugar.Var                  = Var(Left(num))
-      val Seq(cnt, stt): Seq[sugar.Var] = labels.map[sugar.Var](label => Var(Right(label)))
-      val first                         = n - cnt === const(0)                      // 途中で整数引数が境界値に至った
-      val second                        = n <= const(0) && cnt === const(0)         // 整数引数が初めから小さかった
-      val third                         = n - cnt > const(0) && stt === const(init) // 整数引数が最後まで大きかった
-      first || second || third
-    }
-    val internal = ParikhSST[Int, CurrOrDelim, CurrOrDelim, Int, Int, String](
-      states = states.toSet,
-      inSet = Set(curr),
-      xs = Set(listVar),
-      ls = labels.toSet,
-      is = Set(num),
-      edges = edges,
-      q0 = init,
-      outGraph = outGraph,
-      acceptFormulas = Seq(formula)
-    )
-    SimpleStreamingDataStringTransducer2(internal)
-  }
-
-  // 先頭の `num` 個を取ってくる。負数なら1つも取らない。入力サイズより大きければ全体。
-  def take(num: String)(implicit
-      gen: StringGenerator
-  ): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = takeDropImpl(num, isTake = true)
-
-  // 先頭の `num` 個を無視する。負数なら全体を取る。入力サイズより大きければ空列。
-  def drop(num: String)(implicit
-      gen: StringGenerator
-  ): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = takeDropImpl(num, isTake = false)
-
   // DataStringTheory で定義したものから変換
   def from1[D](
       t: SimpleStreamingDataStringTransducer[D]
   ): SimpleStreamingDataStringTransducer2 { type ParikhLabel = Int } = {
     import CurrOrDelim._
     val canon = SimpleStreamingDataStringTransducer.canonicalize(t)
-    def convSpec(w: canon.types.ListSpec): expresso.Cupstar[canon.ListVar, CurrOrDelim] = w.map {
+    def convSpec(w: canon.types.ListSpec): Cupstar[canon.ListVar, CurrOrDelim] = w.map {
       case Left(x)  => Cop1(x)
       case Right(_) => Cop2(curr)
     }.toList
@@ -397,7 +299,7 @@ object SimpleStreamingDataStringTransducer2 {
     val outputRelation =
       Set(((numReadStrings, t.initialState), List(Cop1(xin), Cop1(xout), Cop2(delim: CurrOrDelim)), zeros))
     val edges = {
-      type ListSpec = expresso.Cupstar[ListVar, CurrOrDelim]
+      type ListSpec = Cupstar[ListVar, CurrOrDelim]
       type Update   = expresso.Update[ListVar, CurrOrDelim]
       val idUpdate: Update              = expresso.Update.identity(listVars)
       val mtUpdate: Update              = expresso.Update.reset(listVars)
@@ -451,7 +353,7 @@ object SimpleStreamingDataStringTransducer2 {
     val listVars = (xin until operands.length).toSet
     val zeros    = Map[Int, Int]()
     val edges = {
-      type ListSpec = expresso.Cupstar[Int, CurrOrDelim]
+      type ListSpec = Cupstar[Int, CurrOrDelim]
       type Update   = expresso.Update[Int, CurrOrDelim]
       val idUpdate: Update = listVars.map(x => x -> List(Cop1(x))).toMap
       def add(`var`: Int, sym: CurrOrDelim): Update =
@@ -659,6 +561,30 @@ private object SemanticsSpecs {
     assert(transduce(machine, Map(), seq()) == seq())
   }
 
+  def slice123(machine: SimpleStreamingDataStringTransducer2, begin: String, end: String) = {
+    def transduce123(b: Int, e: Int): DataOrDelimSeq =
+      transduce(machine, Map(begin -> b, end -> e), seq(1, 2, 3))
+    assert(transduce123(0, 3) == seq(1, 2, 3))
+    assert(transduce123(1, 2) == seq(2))
+    assert(transduce123(-2, -1) == seq(2))
+    assert(transduce123(1, -1) == seq(2))
+    assert(transduce123(-2, 2) == seq(2))
+    assert(transduce123(0, 1) == seq(1))
+    assert(transduce123(-3, -2) == seq(1))
+    assert(transduce123(-4, -2) == seq(1))
+    assert(transduce123(2, 3) == seq(3))
+    assert(transduce123(-1, 3) == seq(3))
+    assert(transduce123(2, 5) == seq(3))
+    assert(transduce123(1, 1) == seq())
+    assert(transduce123(-1, -1) == seq())
+    assert(transduce123(3, 2) == seq())
+  }
+
+  def reverse(machine: SimpleStreamingDataStringTransducer2) = {
+    assert(transduce(machine, Map.empty, seq(1, 2, 3)) == seq(3, 2, 1))
+    assert(transduce(machine, Map.empty, seq()) == seq())
+  }
+
 }
 
 object DataStringTransducerExamples extends App {
@@ -668,76 +594,41 @@ object DataStringTransducerExamples extends App {
   // トランスデューサのインスタンスとセマンティクスのテスト
 
   val reverse = SimpleStreamingDataStringTransducer2.reverse
-  assert(transduce(reverse, Map.empty, seq(1, 2, 3)) == seq(3, 2, 1))
-  // slice
+  SemanticsSpecs.reverse(reverse)
+
   val slice = SimpleStreamingDataStringTransducer2.slice("b", "e")
-  def sliceOf123(begin: Int, end: Int): DataOrDelimSeq =
-    transduce(slice, Map("b" -> begin, "e" -> end), seq(1, 2, 3))
-  assert(sliceOf123(0, 3) == seq(1, 2, 3))
-  assert(sliceOf123(1, 2) == seq(2))
-  assert(sliceOf123(-2, -1) == seq(2))
-  assert(sliceOf123(1, -1) == seq(2))
-  assert(sliceOf123(-2, 2) == seq(2))
-  assert(sliceOf123(0, 1) == seq(1))
-  assert(sliceOf123(-3, -2) == seq(1))
-  assert(sliceOf123(-4, -2) == seq(1))
-  assert(sliceOf123(2, 3) == seq(3))
-  assert(sliceOf123(-1, 3) == seq(3))
-  assert(sliceOf123(2, 5) == seq(3))
-  assert(sliceOf123(1, 1) == seq())
-  assert(sliceOf123(-1, -1) == seq())
-  assert(sliceOf123(3, 2) == seq())
-  // comp
-  import SimpleStreamingDataStringTransducer2.{prefix, suffix, liftDelim, concatDelim, projection, take, drop}
-  val i = "i"
-  private implicit val gen: StringGenerator =
-    new StringGenerator(Set("i", "b", "e"))
-  val pref   = prefix(i)
-  val suff   = suffix(i)
-  val theory = DataStringTheory2
-  import theory.composeLeft
-  val comp = {
-    composeLeft(
-      // w0# => w0#w0[0:i]#
-      liftDelim(pref, numReadStrings = 1, operand = 0),
-      // w0#w1# => w0#w1#w0[i:len(w)]#
-      liftDelim(suff, numReadStrings = 2, operand = 0),
-      // w0#w1#w2# => w0#w1#w2#w1w2#
-      concatDelim(numReadStrings = 3, operands = Seq(1, 2)),
-      // w0#w1#w2#w3# => w3#
-      projection(numReadStrings = 4, operands = Seq(3))
-    )
-  }
-  // takeDrop (特殊化された take, drop を使う)
-  val tak = take(i)
-  val drp = drop(i)
-  val takeDrop = {
-    // comp のコピペを改変
-    composeLeft(
-      // w0# => w0#w0[0:i]#
-      liftDelim(tak, numReadStrings = 1, operand = 0),
-      // w0#w1# => w0#w1#w0[i:len(w)]#
-      liftDelim(drp, numReadStrings = 2, operand = 0),
-      // w0#w1#w2# => w0#w1#w2#w1w2#
-      concatDelim(numReadStrings = 3, operands = Seq(1, 2)),
-      // w0#w1#w2#w3# => w3#
-      projection(numReadStrings = 4, operands = Seq(3))
-    )
-  }
-  // comp の定義で使うものも一応テストする
+  SemanticsSpecs.slice123(slice, "b", "e")
+
+  import SimpleStreamingDataStringTransducer2.{concatDelim, projection, liftDelim}
+
   val concat = concatDelim(numReadStrings = 3, operands = Seq(1, 2))
   val projId = projection(numReadStrings = 1, operands = Seq(0))
-  // セマンティクステストの assert たち
+
+  val i = "n"
+
+  val (tak, drp, takeDrop) = {
+    import InputCodeExamples.{defop_take, defop_drop, defprog_concatSplit}
+    val repl = REPL(defop_take ++ defop_drop ++ defprog_concatSplit)
+    repl.setOptions(REPL.Options(print = false))
+    repl.interpretAll()
+    (repl.makeSDST("take", i), repl.makeSDST("drop", i), repl.getSDST("concat-split"))
+  }
+
   SemanticsSpecs.take(tak, i)
+  SemanticsSpecs.drop(drp, i)
+
+  def concatSplitSpec(machine: SimpleStreamingDataStringTransducer2) = {
+    assert(transduce(machine, Map(i -> -2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
+    assert(transduce(machine, Map(i -> 2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
+    assert(transduce(machine, Map(i -> 5), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
+  }
+
+  concatSplitSpec(takeDrop)
+
   assert(transduce(concat, Map(), seq(1, :#, 2, :#, 3, :#)) == seq(1, :#, 2, :#, 3, :#, 2, 3, :#))
-  assert(transduce(comp, Map(i -> -2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
-  assert(transduce(comp, Map(i -> 2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
-  assert(transduce(comp, Map(i -> 5), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
-  assert(transduce(takeDrop, Map(i -> -2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
-  assert(transduce(takeDrop, Map(i -> 2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
-  assert(transduce(takeDrop, Map(i -> 5), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
   assert(transduce(projId, Map(), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
-  val delimRevRev = composeLeft(
+
+  val delimRevRev = DataStringTheory2.composeLeft(
     liftDelim(reverse, numReadStrings = 1, operand = 0),
     liftDelim(reverse, numReadStrings = 2, operand = 1),
     projection(numReadStrings = 3, operands = Seq(2))
@@ -754,7 +645,7 @@ object DataStringTransducerExamples extends App {
     reverseIdentity2,
     reverseIdentity3,
   }
-  import theory.{checkEquivalence, checkFunctionality, compose}
+  import DataStringTheory2.{checkEquivalence, checkFunctionality, compose}
   assert(checkEquivalence(reverse, reverse))
   assert(!checkEquivalence(reverse, identity))
   assert(checkFunctionality(duplicate))
@@ -763,8 +654,8 @@ object DataStringTransducerExamples extends App {
   assert(checkEquivalence(reverseIdentity1, reverseIdentity3))
   assert(!checkEquivalence(duplicate, reverseIdentity1))
   assert(checkEquivalence(compose(reverse, reverse), identity))
-  assert(checkFunctionality(pref))
-  assert(checkFunctionality(suff))
+  assert(checkFunctionality(tak))
+  assert(checkFunctionality(drp))
   def printSize(t: SimpleStreamingDataStringTransducer2): Unit =
     println(
       s"|Q| = ${t.states.size}" ++
@@ -778,14 +669,14 @@ object DataStringTransducerExamples extends App {
   def printTime(): Unit            = println(new java.util.Date(System.currentTimeMillis()))
   def printTime(msg: String): Unit = println(s"${new java.util.Date(System.currentTimeMillis())}: $msg")
   // assert(checkFunctionality(comp))
-  assert(checkEquivalence(delimId, comp))
+  assert(checkEquivalence(delimId, takeDrop))
   // 特殊化された take, drop を使う例
   printTime("tak =equiv? drp")
   assert(!checkEquivalence(tak, drp))
   printTime("tak =equiv? identity")
   assert(!checkEquivalence(tak, identity))
   printTime("func? takeDrop")
-  assert(checkFunctionality(takeDrop)) // この場合は 4 分程度で決定できる
+  assert(checkFunctionality(takeDrop)) // この場合は 5 分程度で決定できる
   printTime("delimID =equiv? takeDrop")
   assert(checkEquivalence(delimId, takeDrop))
   println("equivalence checking examples done")
@@ -817,7 +708,8 @@ object DataStringTheory2 {
   def checkEquivalence(t1: SSDT, t2: SSDT): Boolean = {
     // require(t1.isTotal && t2.isTotal) だが、全域性は決定不能
 
-    import expresso.math.Presburger.Sugar._
+    import Presburger.Sugar._
+    import Presburger.Var
 
     def notEquiv = differByLength || differAtSomePosition
 
@@ -1016,12 +908,12 @@ private abstract class SimplePA2[I] { outer =>
     type Label = expresso.math.Cop[outer.Label, that.Label]
     val internal = outer.internal intersect that.internal
   }
-  def addFormula(f: PresFormula[I]): SimplePA2[I] = new SimplePA2[I] {
+  def addFormula(f: Presburger.Formula[I]): SimplePA2[I] = new SimplePA2[I] {
     type State = outer.State
     type Label = outer.Label
     val internal = {
-      val orig                              = outer.internal
-      val fm: PresFormula[Either[I, Label]] = f.renameVars(Left.apply)
+      val orig                                     = outer.internal
+      val fm: Presburger.Formula[Either[I, Label]] = f.renameVars(Left.apply)
       orig.copy(acceptFormulas = fm +: orig.acceptFormulas)
     }
   }
@@ -1037,7 +929,7 @@ private object SimplePA2 {
       edges: Set[(Q, CurrOrDelim, Map[L, Int], Q)],
       initialStates: Set[Q],
       acceptRelation: Set[(Q, Map[L, Int])],
-      acceptFormulae: Seq[PresFormula[Either[I, L]]]
+      acceptFormulae: Seq[Presburger.Formula[Either[I, L]]]
   )
 
   def from[Q, L, I](spec: ExtendedSyntax[Q, L, I]): SimplePA2[I] = new SimplePA2[I] {
@@ -1701,6 +1593,13 @@ private class Evaluator {
     else println("not equivalent")
   }
 
+  // for tests and debugging
+
+  def makeSDST(name: String, paramNames: String*): SimpleStreamingDataStringTransducer2 =
+    sdstScheme(name)(paramNames)
+
+  def getSDST(name: String): SimpleStreamingDataStringTransducer2 = sdstEnv(name)
+
 }
 
 private class REPL(reader: java.io.Reader) {
@@ -1708,9 +1607,21 @@ private class REPL(reader: java.io.Reader) {
   private val read = new Reader(reader)
   private val eval = new Evaluator
 
-  def interpretOne(): Option[Unit] = read() map eval.apply map println
+  def interpretOne(): Option[Unit] = read() map eval.apply map this.println
 
   def interpretAll(): Unit = interpretOne() foreach (_ => interpretAll())
+
+  // option handling
+
+  private var options = REPL.Options()
+
+  def println(x: Any): Unit = if (options.print) Predef.println(x) else ()
+
+  def setOptions(opts: REPL.Options = REPL.Options()) = options = opts
+
+  // for tests and debugging
+
+  export eval.{makeSDST, getSDST}
 
 }
 
@@ -1718,6 +1629,8 @@ private object REPL {
   def apply(w: String): REPL               = new REPL(new java.io.StringReader(w))
   def apply(file: java.io.File): REPL      = new REPL(new java.io.FileReader(file))
   def apply(is: java.io.InputStream): REPL = new REPL(new java.io.InputStreamReader(is))
+
+  case class Options(print: Boolean = true)
 }
 
 import com.monovore.decline
@@ -2083,7 +1996,6 @@ private object GuardedSDST_withShortcuts {
         Map.from(guard.conjuncts map { case GuardClause(name, comparator, threshold) =>
           intParams(name) -> (comparator, translateArithExp(threshold))
         })
-      import expresso.math.{Cop, Cop1, Cop2}
       def translateListParam[A](special: PartialFunction[String, A], auxParams: String => Int)(
           x: String
       ): Cop[Int, A] = x match {
@@ -2292,7 +2204,7 @@ private abstract class GuardedSDST {
     // 状態の検出を加える
     val outGraph = outputFunction.map { case (state, w) =>
       val stateVec = newLabels.map(_ -> 0).toMap + (Label.S -> stateNumbering(state))
-      val spec     = expresso.Cupstar.lift1[ListVar, CurrOrDelim](w)
+      val spec     = Cupstar.lift1[ListVar, CurrOrDelim](w)
       (state, spec, stateVec)
     }.toSet
     val formulae = {
