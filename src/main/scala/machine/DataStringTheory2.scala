@@ -1113,27 +1113,54 @@ private object InputFormat {
     import math.Numeric.Implicits.infixNumericOps
     def apply[A: Numeric](n: A): A = if (this == Minus) -n else n
   }
-  enum ArithExp {
-    case Const(n: Int)
-    case Var(name: String)
-    case Mod(divident: ArithExp, divisor: ArithExp) // NOTE: divisor must be Const to be linear
-    case Add(e1: ArithExp, e2: ArithExp)
-    case Sub(e1: ArithExp, e2: ArithExp)
-    case Mul(e1: ArithExp, e2: ArithExp) // NOTE: args must be Const to be linear
 
-    def toPresburgerTerm: Presburger.Term[String] = this match {
-      case ArithExp.Const(n)          => Presburger.Const(n)
-      case ArithExp.Var(name: String) => Presburger.Var(name)
-      case ArithExp.Mod(divident: ArithExp, divisor: ArithExp) =>
-        Presburger.Mod(divident.toPresburgerTerm, divisor.toPresburgerTerm)
-      case ArithExp.Add(e1: ArithExp, e2: ArithExp) =>
-        Presburger.Add(Seq(e1.toPresburgerTerm, e2.toPresburgerTerm))
-      case ArithExp.Sub(e1: ArithExp, e2: ArithExp) =>
-        Presburger.Sub(e1.toPresburgerTerm, e2.toPresburgerTerm)
-      case ArithExp.Mul(e1: ArithExp, e2: ArithExp) =>
-        Presburger.Mult(e1.toPresburgerTerm, e2.toPresburgerTerm)
+  trait AExpBase {
+    type exp <: Exp
+    trait Exp
+    protected object Exp {
+      class Const(n: Int)     extends Exp
+      class Var(name: String) extends Exp
+      // NOTE: divisor must be Const to be linear
+      class Mod(divident: exp, divisor: exp) extends Exp
+      class Add(e1: exp, e2: exp)            extends Exp
+      class Sub(e1: exp, e2: exp)            extends Exp
+      // NOTE: args must be Const to be linear
+      class Mul(e1: exp, e2: exp) extends Exp
     }
   }
+
+  trait AExp_ToPresburger extends AExpBase {
+    type exp <: ArithExp
+    trait ArithExp extends super.Exp {
+      def toPresburgerTerm: Presburger.Term[String]
+    }
+    object ArithExp {
+      case class Const(n: Int) extends Exp.Const(n) with ArithExp {
+        def toPresburgerTerm: Presburger.Term[String] = Presburger.Const(n)
+      }
+      case class Var(name: String) extends Exp.Var(name) with ArithExp {
+        def toPresburgerTerm: Presburger.Term[String] = Presburger.Var(name)
+      }
+      case class Mod(divident: exp, divisor: exp) extends Exp.Mod(divident, divisor) with ArithExp {
+        def toPresburgerTerm: Presburger.Term[String] =
+          Presburger.Mod(divident.toPresburgerTerm, divisor.toPresburgerTerm)
+      }
+      case class Add(e1: exp, e2: exp) extends Exp.Add(e1, e2) with ArithExp {
+        def toPresburgerTerm: Presburger.Term[String] =
+          Presburger.Add(Seq(e1.toPresburgerTerm, e2.toPresburgerTerm))
+      }
+      case class Sub(e1: exp, e2: exp) extends Exp.Sub(e1, e2) with ArithExp {
+        def toPresburgerTerm: Presburger.Term[String] =
+          Presburger.Sub(e1.toPresburgerTerm, e2.toPresburgerTerm)
+      }
+      case class Mul(e1: exp, e2: exp) extends Exp.Mul(e1, e2) with ArithExp {
+        def toPresburgerTerm: Presburger.Term[String] =
+          Presburger.Mult(e1.toPresburgerTerm, e2.toPresburgerTerm)
+      }
+    }
+  }
+  object AExp extends AExp_ToPresburger { type exp = this.ArithExp }
+  export AExp.ArithExp
 
   final case class FunCall(name: String, args: Seq[ArgExp])
 
@@ -1158,15 +1185,21 @@ private object InputFormat {
   final case class Assignment(lhs: String, rhs: FunCall) extends ProgramStatement
 
   final case class Assumption(comparator: Comparator, lhs: Assumption.Exp, rhs: Assumption.Exp)
-  object Assumption {
-    sealed abstract class Exp
-    final case class Const(n: Int)                    extends Exp
-    final case class Var(name: String)                extends Exp
-    case object Length                                extends Exp
-    final case class Mod(divident: Exp, divisor: Exp) extends Exp // NOTE: divisor must be Const to be linear
-    final case class Add(e1: Exp, e2: Exp)            extends Exp
-    final case class Mul(e1: Exp, e2: Exp)            extends Exp // NOTE: args must be Const to be linear
-    final case class Minus(e: Exp)                    extends Exp
+
+  object Assumption extends AExpBase {
+    type exp = this.Exp
+    case object Length extends this.Exp
+    object ArithExp {
+      case class Const(n: Int)     extends Exp.Const(n)
+      case class Var(name: String) extends Exp.Var(name: String)
+      // NOTE: divisor must be Const to be linear
+      case class Mod(divident: exp, divisor: exp) extends Exp.Mod(divident, divisor)
+      case class Add(e1: exp, e2: exp)            extends Exp.Add(e1, e2)
+      case class Sub(e1: exp, e2: exp)            extends Exp.Sub(e1, e2)
+      // NOTE: args must be Const to be linear
+      case class Mul(e1: exp, e2: exp) extends Exp.Mul(e1, e2)
+    }
+    export ArithExp._
   }
 
   /// Top-level forms
@@ -1304,6 +1337,37 @@ private object InputCodeExamples extends App {
   val script_01 =
     defop_take ++ defop_drop ++ defop_identity ++ defprog_concatSplit ++ defprog_identity ++ equiv_concatSplit_identity
 
+  val script_02 = """
+;; 偶数番目だけを取る
+(defop (take-even l) (te0 nil l)
+  :aux-args acc input
+  :where
+  ((te0 acc nil)         acc)
+  ((te0 acc (cons x xs)) (te1 acc xs))
+  ((te1 acc nil)         acc)
+  ((te1 acc (cons x xs)) (te0 (++ acc (list x)) xs)))
+
+(defop (reverse l) (rec nil l)
+  :aux-args acc input
+  :where
+  ((rec acc nil)         acc)
+  ((rec acc (cons x xs)) (rec (++ (list x) acc) xs)))
+
+(defprog te-rev :param :input x :inter y :output z
+  :body
+  (:= y (reverse x))
+  (:= z (take-even y)))
+
+(defprog rev-te :param :input x :inter y :output z
+  :body
+  (:= y (take-even x))
+  (:= z (reverse y)))
+
+(equiv?! te-rev rev-te) ; not equivalent
+
+;; 奇数長の入力リストに対しては等価
+(equiv?! te-rev rev-te :assumption (= (mod length 2) 1)) ; equivalent
+"""
 }
 
 private object Reader {
@@ -1312,7 +1376,7 @@ private object Reader {
   import InputFormat._
   import smtlib.trees.Terms.{SExpr, SList, SSymbol, SKeyword, SNumeral}
 
-  type SListParser[+A] = Seq[SExpr] => Seq[(A, Seq[SExpr])]
+  trait SListParser[+A] extends Function1[Seq[SExpr], Seq[(A, Seq[SExpr])]]
   private val ParserSeqImpl = LazyList
 
   extension [A](self: SListParser[A]) {
@@ -1374,16 +1438,19 @@ private object Reader {
   def funcall[A](funName: String)(arguments: SListParser[A]): SListParser[A] =
     list(constSymbol(funName) >> arguments)
 
-  val arith: SListParser[ArithExp] = {
+  val arith: SListParser[ArithExp] = new SListParser[ArithExp] {
     val variable = symbol map (name => ArithExp.Var(name))
     val const    = int map ArithExp.Const.apply
-    val bop = unionMap(
-      "+"   -> ArithExp.Add.apply,
-      "-"   -> ArithExp.Sub.apply,
-      "*"   -> ArithExp.Mul.apply,
-      "mod" -> ArithExp.Mod.apply,
-    ) { case (op, construct) => funcall(op)((arith * arith) map (construct(_, _))) }
-    variable | const | bop
+    def bop(xs: Seq[SExpr]) = {
+      val p = unionMap(
+        "+"   -> ArithExp.Add.apply,
+        "-"   -> ArithExp.Sub.apply,
+        "*"   -> ArithExp.Mul.apply,
+        "mod" -> ArithExp.Mod.apply,
+      ) { case (op, construct) => funcall(op)((this * this) map (construct(_, _))) }
+      p(xs)
+    }
+    def apply(xs: Seq[SExpr]) = variable(xs) ++ const(xs) ++ bop(xs)
   }
 
   def many1[A](p: SListParser[A]): SListParser[Seq[A]] = for {
@@ -1443,11 +1510,14 @@ private object Reader {
   // NOTE: "++" を特別扱いしたいので append を優先する
   val auxFnBody: SListParser[AuxFnBody]             = nil | symbol | append | auxFunCall
   val noGuard: SListParser[Seq[(Guard, AuxFnBody)]] = auxFnBody map NoGuard.apply
+  val inequal: SListParser[Inequal] =
+    reserved(">" -> Inequal.Gt, ">=" -> Inequal.Ge, "<" -> Inequal.Lt, "<=" -> Inequal.Le)
   val guard: SListParser[Guard] = {
-    val clause = unionMap(">" -> Inequal.Gt, ">=" -> Inequal.Ge, "<" -> Inequal.Lt, "<=" -> Inequal.Le) {
-      case (op, ineq) =>
-        funcall(op)((symbol * arith) map { case (name, threshold) => GuardClause(name, ineq, threshold) })
-    }
+    val clause = list(for {
+      ineq      <- inequal
+      name      <- symbol
+      threshold <- arith
+    } yield GuardClause(name, ineq, threshold))
     val and = funcall("and")(many(clause))
     (and | (clause map (x => Seq(x)))) map Guard.apply
   }
@@ -1509,12 +1579,38 @@ private object Reader {
     } yield DefineProgram(name, params, input, inter, output, body)
   }
 
+  def optionSeq[A](p: SListParser[Seq[A]]): SListParser[Seq[A]] = p | unit(Nil)
+
+  val comparator: SListParser[Comparator] = inequal | reserved("=" -> Equal)
+
+  val assumptionExp: SListParser[Assumption.Exp] = new SListParser[Assumption.Exp] {
+    val length   = constSymbol("length") >> unit(Assumption.Length)
+    val variable = symbol map (name => Assumption.Var(name))
+    val const    = int map Assumption.Const.apply
+    def bop(xs: Seq[SExpr]) = {
+      val p = unionMap(
+        "+"   -> Assumption.Add.apply,
+        "-"   -> Assumption.Sub.apply,
+        "*"   -> Assumption.Mul.apply,
+        "mod" -> Assumption.Mod.apply,
+      ) { case (op, construct) => funcall(op)((this * this) map (construct(_, _))) }
+      p(xs)
+    }
+    def apply(xs: Seq[SExpr]) = length(xs) ++ variable(xs) ++ const(xs) ++ bop(xs)
+  }
+  val assumptions: SListParser[Seq[Assumption]] = keywordArgs("assumption")(many(list(for {
+    comp <- comparator
+    lhs  <- assumptionExp
+    rhs  <- assumptionExp
+  } yield Assumption(comp, lhs, rhs))))
+
   val equiv: SListParser[Command] = list {
     for {
-      _     <- constSymbol("equiv?!")
-      name1 <- symbol
-      name2 <- symbol
-    } yield CheckEquiv(name1, name2, Nil) // TODO: とりあえず動かすため assumption は Nil
+      _           <- constSymbol("equiv?!")
+      name1       <- symbol
+      name2       <- symbol
+      assumptions <- optionSeq(assumptions)
+    } yield CheckEquiv(name1, name2, assumptions)
   }
 
   def read[A](p: SListParser[A])(sexpr: SExpr): Option[A] = p.parse(ParserSeqImpl(sexpr))
@@ -1600,7 +1696,7 @@ private class Evaluator {
       t2: SimpleStreamingDataStringTransducer2,
       assumptions: Seq[Assumption]
   ) = {
-    require(assumptions.isEmpty) // TODO: とりあえず動かすための仮定
+    require(assumptions.isEmpty, assumptions) // TODO: とりあえず動かすための仮定
     if (theory.checkEquivalence(t1, t2)) println("equivalent")
     else println("not equivalent")
   }
@@ -1641,6 +1737,7 @@ object Eqlisp
 private object REPLExamples extends App {
   import InputCodeExamples._
   REPL(script_01).interpretAll()
+  REPL(script_02).interpretAll()
 }
 
 private object InputFormatExamples extends App {
