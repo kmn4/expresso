@@ -1,0 +1,30 @@
+;; defop -- define operator
+;; 引数は整数が先で、最後は必ず入力リスト。
+;;      シグネチャ   定義
+(defop (take n l) (rec nil n l)
+  ;; 補助関数の引数の種類のリスト
+  ;; acc   - 蓄積 (accumulator) であり、SDST のリスト変数に対応する
+  ;; param - 整数パラメタ
+  ;; input - 入力リスト
+  :aux-args acc param input
+  :where ; 補助関数の定義たち
+  ;; 各節の car は関数名、引数名と、入力リストについてのパターンマッチを持つ。
+  ((rec acc n nil) acc)    ; 入力リストが空
+  ((rec acc n (cons x xs)) ; 入力リストが非空
+   (cond ; 整数引数に関するガードによる場合分け
+    ((> n 0)  (rec (++ acc (list x)) (- n 1) xs))
+    ((<= n 0) acc))))
+
+(defop (drop n l) (rec nil n l)
+  :aux-args acc param input
+  :where
+  ((rec acc n nil) acc)
+  ((rec acc n (cons x xs))
+   (cond
+     ((> n 0) (rec acc (- n 1) xs))
+     ((<= n 0) (++ (list x) xs)))))
+
+(defop (identity l) (r nil l) :aux-args acc input
+  :where
+  ((r acc nil) acc)
+  ((r acc (cons x xs)) (r (++ acc (list x)) xs)))

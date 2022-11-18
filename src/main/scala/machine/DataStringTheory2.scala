@@ -1636,8 +1636,21 @@ object Eqlisp
       header = "decide equivalence of list programs",
       main = {
         import decline._
-        val inputStream: Opts[java.io.InputStream] =
-          Opts.apply(System.in)
+        import java.io.{InputStream, FileInputStream, SequenceInputStream}
+        import java.nio.file.Path
+        // 複数ファイルを指定可能。
+        // 省略されていたら標準入力。
+        val inputStream: Opts[InputStream] = Opts
+          .arguments[Path]("script file")
+          .orNone
+          .map {
+            case Some(filePaths) =>
+              filePaths
+                .map[InputStream](path => new FileInputStream(path.toFile()))
+                .reduceLeft(new SequenceInputStream(_, _))
+            case None => System.in
+          }
+        //Opts.argument[String](metavar = "script file") map ???
         inputStream map (is => REPL(is).interpretAll())
       }
     )
