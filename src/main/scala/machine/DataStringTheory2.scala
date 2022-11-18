@@ -1213,13 +1213,8 @@ private object InputCodeExamples extends App {
 """
 
   val defprog_identity = """
-(defprog identity
-  :param
-  :input x
-  :inter
-  :output y
-  :body
-  (:= y (identity x)))
+(defprog identity :input x :output y
+  :body (:= y (identity x)))
 """
 
   val equiv_concatSplit_identity = """
@@ -1245,12 +1240,12 @@ private object InputCodeExamples extends App {
   ((rec acc nil)         acc)
   ((rec acc (cons x xs)) (rec (++ (list x) acc) xs)))
 
-(defprog te-rev :param :input x :inter y :output z
+(defprog te-rev :input x :inter y :output z
   :body
   (:= y (reverse x))
   (:= z (take-even y)))
 
-(defprog rev-te :param :input x :inter y :output z
+(defprog rev-te :input x :inter y :output z
   :body
   (:= y (take-even x))
   (:= z (reverse y)))
@@ -1463,9 +1458,9 @@ private object Reader {
     for {
       _      <- constSymbol("defprog")
       name   <- symbol
-      params <- keywordArgs("param")(many(symbol))
+      params <- optionSeq(keywordArgs("param")(many(symbol)))
       input  <- keywordArgs("input")(symbol)
-      inter  <- keywordArgs("inter")(many(symbol))
+      inter  <- optionSeq(keywordArgs("inter")(many(symbol)))
       output <- keywordArgs("output")(symbol)
       body   <- keywordArgs("body")(many(assignment))
     } yield DefineProgram(name, params, input, inter, output, body)
