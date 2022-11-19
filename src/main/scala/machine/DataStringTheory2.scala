@@ -145,6 +145,13 @@ abstract class SimpleStreamingDataStringTransducer2 {
       s"initialState=${initialState}" ++
       s"acceptFormulae=${acceptFormulae}"
 
+  def addParamFormula(formula: Presburger.Formula[String]): SimpleStreamingDataStringTransducer2 = {
+    val sugar = new PresburgerFormulaSugarForParikhAutomaton[String, ParikhLabel]
+    import sugar._
+    val formulae = internalSST.acceptFormulas :+ formula.injected
+    SimpleStreamingDataStringTransducer2(internalSST = internalSST.copy(acceptFormulas = formulae))
+  }
+
 }
 
 object SimpleStreamingDataStringTransducer2 {
@@ -346,59 +353,86 @@ object SimpleStreamingDataStringTransducer2 {
     )
   }
 
-  def concatDelim(numReadStrings: Int, operands: Seq[Int]): SSDT = {
-    val states = (0 to numReadStrings).toSet
-    val xin    = -1
-    // 変数 i には operands(i) 番目の文字列を格納する
+  def delim_scheme(
+      numReadStrings: Int,
+      concatOperands: Option[Seq[Int]],
+      preserveList: Int => Boolean = _ => true,
+      useLength: Set[Int] = Set(),
+      forbiddenParamNames: Set[String] = Set(),
+  ): (SSDT, Map[Int, String]) = {
+
+    val gen         = new StringGenerator(forbiddenParamNames)
+    val lengthParam = Map.from(useLength map (_ -> gen()))
+
+    // numReadStrings 個のデータリストを区切り文字で区切って並置したものを読む。
+    // i 番目のデータリストは状態 i で読む。
+    // concatOperands == Some(operands) であるとき、
+    // リスト変数 i には operands(i) 番目のデータリストを格納し、
+    // operands に登場する順に連接したものを出力に加える。
+    // concatOperands == None なら出力しない (末尾の区切り文字も出力されない)。
+    // preserveList(i) なら x_{in} に i 番目のデータリストを保存し、
+    // これは前記の連接の左に出力される。
+    // useLength(i) なら i 番目のデータリストの長さをラベル i でカウントして、
+    // 「lengthParam(i): Param === i: Label」 を受理論理式に加える。
+
+    val shouldEmitConcat = concatOperands.nonEmpty
+    val operands         = concatOperands.getOrElse(Nil)
+
+    val states   = (0 to numReadStrings).toSet
+    val xin      = -1
     val listVars = (xin until operands.length).toSet
-    val zeros    = Map[Int, Int]()
+    val labels   = Set.from((0 until numReadStrings).filter(useLength))
+    val zeros    = ParikhImage.zeros(labels)
     val edges = {
-      type ListSpec = Cupstar[Int, CurrOrDelim]
-      type Update   = expresso.Update[Int, CurrOrDelim]
-      val idUpdate: Update = listVars.map(x => x -> List(Cop1(x))).toMap
-      def add(`var`: Int, sym: CurrOrDelim): Update =
-        Map(`var` -> List(Cop1(`var`), Cop2(sym)))
-      // 状態 i における区切り文字による遷移では、
-      // 区切り文字を xin にだけ加える。
+      val id = expresso.Update.identity[Int, CurrOrDelim](listVars)
+      def add(spec: (Int, CurrOrDelim)*) =
+        id ++ Map.from(spec map { (`var`, sym) => `var` -> List(Cop1(`var`), Cop2(sym)) })
       val delimEdges = for {
         i <- 0 until numReadStrings
-      } yield {
-        (i, delim, idUpdate ++ add(xin, delim), zeros, i + 1)
-      }
-      // 状態 i におけるデータによる遷移（ループ）では、
-      // operands(j) == i となるすべての j と xin に、読んだ文字を加える。
+      } yield (i, delim, if (preserveList(i)) add(xin -> delim) else add(), zeros, i + 1)
       def inverse(i: Int): Seq[Int] = for ((x, j) <- operands.zipWithIndex if x == i) yield j
       def edgeStoring(i: Int) = {
-        val storedIn = inverse(i) :+ xin
-        val update   = idUpdate ++ storedIn.flatMap(add(_, curr))
-        (i, curr, update, zeros, i)
+        val storage     = if (preserveList(i)) inverse(i) :+ xin else inverse(i)
+        val update      = add((storage map (_ -> curr)): _*)
+        val parikhImage = if (useLength(i)) zeros + (i -> 1) else zeros
+        (i, curr, update, parikhImage, i)
       }
       (delimEdges ++ (0 until numReadStrings).map(edgeStoring)).toSet
     }
-    // xin operands # を出力
-    val outputRelation =
-      Set(
-        (
-          numReadStrings,
-          List.from(Cop1(xin) +: operands.indices.map(Cop1(_)) :+ Cop2(delim: CurrOrDelim)),
-          zeros
+    val outputRelation = {
+      var output: expresso.Cupstar[Int, CurrOrDelim] = List(Cop1(xin))
+      if (shouldEmitConcat) output ++= operands.indices.map(Cop1(_)) :+ Cop2(delim: CurrOrDelim)
+      Set((numReadStrings, output, zeros))
+    }
+
+    val formulae = {
+      val sugar = new PresburgerFormulaSugarForParikhAutomaton[String, Int]
+      import sugar.{label, param, _}
+      Seq.from(useLength map (l => label(l) === param(lengthParam(l))))
+    }
+
+    val countSDST: SSDT =
+      SSDT(
+        ParikhSST(
+          states = states,
+          inSet = Set(curr, delim),
+          xs = listVars,
+          ls = labels,
+          is = Set.from(lengthParam.values),
+          edges = edges,
+          q0 = 0,
+          outGraph = outputRelation,
+          acceptFormulas = formulae
         )
       )
-    SSDT(
-      ParikhSST(
-        states = states,
-        inSet = Set(curr, delim),
-        xs = listVars,
-        ls = Set(),
-        is = Set(),
-        edges = edges,
-        q0 = 0,
-        outGraph = outputRelation,
-        acceptFormulas = Seq()
-      )
-    )
+
+    (countSDST, lengthParam)
   }
 
+  def concatDelim(numReadStrings: Int, operands: Seq[Int]): SSDT =
+    delim_scheme(numReadStrings, Some(operands))._1
+
+  // WARN: 今の所 operands.length == 1 じゃないと意図通り動かない (?)
   def projection(numReadStrings: Int, operands: Seq[Int]): SSDT = {
     val concat = concatDelim(numReadStrings, operands)
     val rel    = concat.internalSST.outGraph.head
@@ -410,6 +444,7 @@ object SimpleStreamingDataStringTransducer2 {
       )
     )
   }
+
 }
 
 private class PresSugar[X] {
@@ -444,6 +479,9 @@ private class PresburgerFormulaSugarForParikhAutomaton[I, L] extends PresSugar[E
 
   extension (term: Presburger.Term[I]) {
     def injected: Term = term.renameVars(Left(_))
+  }
+  extension (formula: Presburger.Formula[I]) {
+    def injected: Formula = formula.renameVars(Left(_))
   }
 }
 
@@ -1576,15 +1614,12 @@ private class Evaluator {
     case comm: CheckEquiv => checkEquiv(sdstEnv(comm.name1), sdstEnv(comm.name2), comm.assumptions)
   }
 
-  private val theory = DataStringTheory2
-
   def checkEquiv(
       t1: SimpleStreamingDataStringTransducer2,
       t2: SimpleStreamingDataStringTransducer2,
       assumptions: Seq[Assumption]
   ) = {
-    require(assumptions.isEmpty, assumptions) // TODO: とりあえず動かすための仮定
-    if (theory.checkEquivalence(t1, t2)) println("equivalent")
+    if (Evaluator.checkEquiv(t1, t2, assumptions)) println("equivalent")
     else println("not equivalent")
   }
 
@@ -1595,6 +1630,76 @@ private class Evaluator {
 
   def getSDST(name: String): SimpleStreamingDataStringTransducer2 = sdstEnv(name)
 
+}
+
+private object Evaluator {
+
+  import InputFormat._
+  import SimpleStreamingDataStringTransducer2.delim_scheme
+  import DataStringTheory2.compose
+
+  val sugar = new PresSugar[String]
+  import sugar._
+
+  def checkEquiv(
+      t1: SimpleStreamingDataStringTransducer2,
+      t2: SimpleStreamingDataStringTransducer2,
+      assumptions: Seq[Assumption]
+  ): Boolean = {
+    if (assumptions.isEmpty) return DataStringTheory2.checkEquivalence(t1, t2)
+
+    // 入力リストのデータ数をカウントするトランスデューサを左から合成する
+
+    val params = t1.intParams ++ t2.intParams
+    // TODO: defprog の :input が複数な場合を許すなら以下も修正する
+    val nInputLists = 1
+    val (count, _lengthParam) =
+      delim_scheme(
+        numReadStrings = nInputLists,
+        concatOperands = None,
+        useLength = Set(0),
+        forbiddenParamNames = params
+      ): @unchecked
+    val lengthParam  = _lengthParam(0)
+    val t1WithLength = compose(count, t1)
+    val t2WithLength = compose(count, t2)
+
+    // カウント情報を使って assumptions に相当する論理式を付け加える
+
+    extension (self: Assumption.Exp) {
+      def toArithExp(lengthVarName: String): ArithExp = self match {
+        case Assumption.Length    => ArithExp.Var(lengthVarName)
+        case Assumption.Const(n)  => ArithExp.Const(n)
+        case Assumption.Var(name) => ArithExp.Var(name)
+        case Assumption.Add(e1, e2) =>
+          ArithExp.Add(e1.toArithExp(lengthVarName), e2.toArithExp(lengthVarName))
+        case Assumption.Sub(e1, e2) =>
+          ArithExp.Sub(e1.toArithExp(lengthVarName), e2.toArithExp(lengthVarName))
+        case Assumption.Mod(e1, e2) =>
+          ArithExp.Mod(e1.toArithExp(lengthVarName), e2.toArithExp(lengthVarName))
+        case Assumption.Mul(e1, e2) =>
+          ArithExp.Mul(e1.toArithExp(lengthVarName), e2.toArithExp(lengthVarName))
+      }
+    }
+
+    val assumptionFormula: Formula = Monoid.foldMap(assumptions) { case Assumption(comparator, lhs, rhs) =>
+      val lterm = lhs.toArithExp(lengthParam).toPresburgerTerm
+      val rterm = rhs.toArithExp(lengthParam).toPresburgerTerm
+      val makeFormula: (Term, Term) => Formula = comparator match {
+        case Equal      => Presburger.Eq(_, _)
+        case Inequal.Ge => Presburger.Ge(_, _)
+        case Inequal.Gt => Presburger.Gt(_, _)
+        case Inequal.Le => Presburger.Le(_, _)
+        case Inequal.Lt => Presburger.Lt(_, _)
+      }
+      makeFormula(lterm, rterm)
+    }(Presburger.conjunctiveMonoid)
+
+    DataStringTheory2.checkEquivalence(
+      t1WithLength.addParamFormula(assumptionFormula),
+      t2WithLength.addParamFormula(assumptionFormula)
+    )
+  }
 }
 
 private class REPL(reader: java.io.Reader) {
