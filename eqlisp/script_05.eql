@@ -1,0 +1,8 @@
+(defprog identity :input x :output y
+  :body (:= y (identity x)))
+
+(defprog take-all
+    :input x :output y
+    :body (:= y (take (length x) x)))
+
+(equiv?! take-all identity)

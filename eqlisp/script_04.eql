@@ -1,17 +1,11 @@
 (defprog drop-reverse
-    :param n
-    :input x
-    :inter y
-    :output z
+    :param n :input x :inter y :output z
     :body
     (:= y (reverse x))
     (:= z (drop (- (length x) n) y)))
 
 (defprog reverse-take
-    :param n
-    :input x
-    :inter y
-    :output z
+    :param n :input x :inter y :output z
     :body
     (:= y (take n x))
     (:= z (reverse y)))

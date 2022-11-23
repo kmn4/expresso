@@ -373,7 +373,6 @@ object SimpleStreamingDataStringTransducer2 {
       concatOperands: Option[Seq[Int]],
       preserveList: Int => Boolean = _ => true,
       useLength: Set[Int] = Set(),
-      forbiddenParamNames: Set[String] = Set(),
   ): (SSDT, Map[Int, String]) = {
 
     val gen         = ParamGenerator
@@ -741,10 +740,13 @@ private trait ParamGenerator { def apply(): String; def gen(): String = apply() 
 private object ParamGenerator extends ParamGenerator {
   private val used: MSet[String] = MSet.empty
   private val prefix: String     = "_$"
+  private val ascii: Array[Char] = Array.from(('A' to 'Z') ++ ('a' to 'z'))
+  private def nextASCII(): Char  = ascii(scala.util.Random.nextInt(ascii.length))
   private def randomString(): String = {
     import scala.util.Random
-    val len = Random.between(3, 7)
-    s"${prefix}${List.fill(len)(Random.nextPrintableChar())}"
+    // 52^6 = 19,770,609,664 通りあれば十分
+    val id = List.fill(6)(nextASCII()).mkString
+    s"${prefix}${id}"
   }
   def apply(): String = {
     val res = LazyList.from(0).map(_ => randomString()).find(!used(_)).get
@@ -764,7 +766,7 @@ object DataStringTheory2 {
     transducers.reduceLeft(compose)
   def checkFunctionality(t: SSDT): Boolean = checkEquivalence(t, t)
   def checkEquivalence(t1: SSDT, t2: SSDT): Boolean = {
-    // require(t1.isTotal && t2.isTotal) だが、全域性は決定不能
+    // NOTE: 定義域の等価性は省略している
 
     import Presburger.Sugar._
     import Presburger.Var
@@ -1137,7 +1139,50 @@ private object InputFormat {
 
   sealed abstract class ProgramStatement
   final case class Assignment(lhs: String, rhs: FunCall) extends ProgramStatement
-  final case class FunCall(name: String, args: Seq[ArithExp | String])
+  final case class FunCall(name: String, args: Seq[FunCallArithExp | String])
+
+  type FunCallArithExp = FunCallArith.Exp
+  object FunCallArith extends AExpBase {
+    type exp = this.Exp
+    case class Length(name: String) extends this.Exp
+    object ArithExp {
+      case class Const(n: Int)                    extends Exp.Const(n)
+      case class Var(name: String)                extends Exp.Var(name: String)
+      case class Mod(divident: exp, divisor: exp) extends Exp.Mod(divident, divisor)
+      case class Add(e1: exp, e2: exp)            extends Exp.Add(e1, e2)
+      case class Sub(e1: exp, e2: exp)            extends Exp.Sub(e1, e2)
+      case class Mul(e1: exp, e2: exp)            extends Exp.Mul(e1, e2)
+    }
+
+    export ArithExp._
+  }
+
+  extension (self: FunCallArithExp) {
+    def toArithExp(renameLength: String => String): ArithExp = {
+      def aux(e: FunCallArithExp): ArithExp = e match {
+        case FunCallArith.Length(x)   => ArithExp.Var(renameLength(x))
+        case FunCallArith.Const(x)    => ArithExp.Const(x)
+        case FunCallArith.Var(x)      => ArithExp.Var(x)
+        case FunCallArith.Mod(e1, e2) => ArithExp.Mod(aux(e1), aux(e2))
+        case FunCallArith.Add(e1, e2) => ArithExp.Add(aux(e1), aux(e2))
+        case FunCallArith.Sub(e1, e2) => ArithExp.Sub(aux(e1), aux(e2))
+        case FunCallArith.Mul(e1, e2) => ArithExp.Mul(aux(e1), aux(e2))
+      }
+      aux(self)
+    }
+    def lengthCallArgs: Set[String] = {
+      def aux(e: FunCallArithExp): Set[String] = e match {
+        case FunCallArith.Length(x)   => Set(x)
+        case FunCallArith.Const(x)    => Set.empty
+        case FunCallArith.Var(x)      => Set.empty
+        case FunCallArith.Mod(e1, e2) => aux(e1) ++ aux(e2)
+        case FunCallArith.Add(e1, e2) => aux(e1) ++ aux(e2)
+        case FunCallArith.Sub(e1, e2) => aux(e1) ++ aux(e2)
+        case FunCallArith.Mul(e1, e2) => aux(e1) ++ aux(e2)
+      }
+      aux(self)
+    }
+  }
 
   final case class Assumption(comparator: Comparator, lhs: Assumption.Exp, rhs: Assumption.Exp)
 
@@ -1179,14 +1224,36 @@ private object InputFormat {
     private val listNames        = Seq(inputList) ++ intermidiateLists ++ Seq(outputList)
     private val nthListName      = listNames.zipWithIndex.toMap
     private val definedListNames = body map { case Assignment(name, _) => name }
+    private val lengthMeasuredVars: Set[String] = Set.from {
+      def collect(args: Seq[FunCallArithExp | String]): Seq[String] = args flatMap {
+        case x: FunCallArithExp => x.lengthCallArgs
+        case _: String          => Set.empty
+      }
+      body flatMap { case Assignment(_, FunCall(_, args)) => collect(args) }
+    }
     // 中間生成リストや出力リストとして指定された通りの順に、その値が定義される
     require(((intermidiateLists ++ Seq(outputList)) zip definedListNames).forall(_ == _))
     def makeSDST(
         env: String => Seq[String] => SimpleStreamingDataStringTransducer2
     ): SimpleStreamingDataStringTransducer2 = {
+
+      // counter: 区切られた出力リストを読んでカウントする SDST
+      // _lengthParamName(i): i 番目のリストの長さが束縛されるパラメータ
+      // lengthParamName(x): 変数 x のリストの長さが束縛されるパラメータ
+      // NOTE: lengthMeasuredVars.isEmpty なら不要
+      val (counter, _lengthParamName) =
+        SimpleStreamingDataStringTransducer2.delim_scheme(
+          numReadStrings = listNames.length,
+          concatOperands = None,
+          useLength = lengthMeasuredVars map nthListName
+        )
+      val lengthParamName: Map[String, String] =
+        _lengthParamName map { case (idx, name) => listNames(idx) -> name }
+      val lengthParamNames: Set[String] = Set.from(lengthParamName.values)
+
       val delimitedStringTransducers: Seq[SimpleStreamingDataStringTransducer2] =
-        body.zipWithIndex map { case (Assignment(definedVar, FunCall(funName, funArgs)), ithStatement) =>
-          val numReadStrings = 1 /* inputList */ + ithStatement
+        body.zipWithIndex map { case (Assignment(definedVar, FunCall(funName, funArgs)), idxStatement) =>
+          val numReadStrings = 1 /* inputList */ + idxStatement
           if (funName == "++") // TODO: 特別扱いされるべき関数が他にないか考える
             SimpleStreamingDataStringTransducer2
               .concatDelim(
@@ -1199,13 +1266,15 @@ private object InputFormat {
             // 関数呼び出しの引数が算術論理式 exp ならば、
             // 名前 name を生成して、構成される SDST にパラメータとして name を、
             // 受理論理式として exp === name を追加する。
+            // exp 内の (length x) は lengthParamName(x) に置き換えられる。
 
             val (intArgs, freshNameOpts, formulaOpts) = funArgs.init.map {
               case x: String => (x, Option.empty, Option.empty)
-              case exp: ArithExp =>
+              case exp: FunCallArithExp =>
                 import Presburger.{Eq, Var}
-                val name = ParamGenerator.gen()
-                (name, Option(name), Option(Eq(exp.toPresburgerTerm, Var(name))))
+                val name               = ParamGenerator.gen()
+                val arithExp: ArithExp = exp.toArithExp(lengthParamName)
+                (name, Option(name), Option(Eq(arithExp.toPresburgerTerm, Var(name))))
             }.unzip3
             val freshNames        = freshNameOpts.flatten
             val conjunction       = Presburger.Conj(formulaOpts.flatten)
@@ -1216,14 +1285,14 @@ private object InputFormat {
                 numReadStrings = numReadStrings,
                 operand = nthListName(listInput)
               )
-              .addParamsAndFormula(freshNames, conjunction)
+              .addParamsAndFormula(freshNames ++ lengthParamNames, conjunction)
           }
         }
-      // TODO: funArgs には length 関数を含む算術式も使いたい
       val projection =
         SimpleStreamingDataStringTransducer2
           .projection(numReadStrings = listNames.length, operands = Seq(nthListName(outputList)))
-      val transducers = delimitedStringTransducers ++ Seq(projection)
+      // TODO: lengthMeasuredVars.isEmpty なら counter は不要
+      val transducers = delimitedStringTransducers ++ Seq(counter) ++ Seq(projection)
       DataStringTheory2.composeLeft(transducers: _*)
     }
   }
@@ -1503,9 +1572,25 @@ private object Reader {
     }
   }
 
+  val funCallArith: SListParser[FunCallArithExp] = new SListParser[FunCallArith.Exp] {
+    val length   = funcall("length")(symbol map FunCallArith.Length.apply)
+    val variable = symbol map (name => FunCallArith.Var(name))
+    val const    = int map FunCallArith.Const.apply
+    def bop(xs: Seq[SExpr]) = {
+      val p = unionMap(
+        "+"   -> FunCallArith.Add.apply,
+        "-"   -> FunCallArith.Sub.apply,
+        "*"   -> FunCallArith.Mul.apply,
+        "mod" -> FunCallArith.Mod.apply,
+      ) { case (op, construct) => funcall(op)((this * this) map (construct(_, _))) }
+      p(xs)
+    }
+    def apply(xs: Seq[SExpr]) = length(xs) ++ variable(xs) ++ const(xs) ++ bop(xs)
+  }
+
   val progFunCall: SListParser[FunCall] = list(for {
     name <- symbol
-    args <- many(symbol | arith)
+    args <- many(symbol | funCallArith)
   } yield FunCall(name, args))
 
   val assignment: SListParser[Assignment] = list(for {
@@ -1684,7 +1769,6 @@ private class Evaluator {
 private object Evaluator {
 
   import InputFormat._
-  import SimpleStreamingDataStringTransducer2.delim_scheme
   import DataStringTheory2.compose
 
   val sugar = new PresSugar[String]
@@ -1703,11 +1787,10 @@ private object Evaluator {
     // TODO: defprog の :input が複数な場合を許すなら以下も修正する
     val nInputLists = 1
     val (count, _lengthParam) =
-      delim_scheme(
+      SimpleStreamingDataStringTransducer2.delim_scheme(
         numReadStrings = nInputLists,
         concatOperands = None,
         useLength = Set(0),
-        forbiddenParamNames = params
       ): @unchecked
     val lengthParam  = _lengthParam(0)
     val t1WithLength = compose(count, t1)
