@@ -145,11 +145,23 @@ abstract class SimpleStreamingDataStringTransducer2 {
       s"initialState=${initialState}" ++
       s"acceptFormulae=${acceptFormulae}"
 
-  def addParamFormula(formula: Presburger.Formula[String]): SimpleStreamingDataStringTransducer2 = {
+  def addParamFormulaExtendingParamSet(
+      formula: Presburger.Formula[String]
+  ): SimpleStreamingDataStringTransducer2 =
+    addParamsAndFormula(formula.freeVars, formula)
+
+  def addParamsAndFormula(
+      params: Iterable[String],
+      formula: Presburger.Formula[String]
+  ): SimpleStreamingDataStringTransducer2 = {
     val sugar = new PresburgerFormulaSugarForParikhAutomaton[String, ParikhLabel]
     import sugar._
+    val newParamSet = intParams ++ params
+    require(formula.freeVars subsetOf newParamSet)
     val formulae = internalSST.acceptFormulas :+ formula.injected
-    SimpleStreamingDataStringTransducer2(internalSST = internalSST.copy(acceptFormulas = formulae))
+    SimpleStreamingDataStringTransducer2(internalSST =
+      internalSST.copy(is = newParamSet, acceptFormulas = formulae)
+    )
   }
 
 }
@@ -361,7 +373,7 @@ object SimpleStreamingDataStringTransducer2 {
       forbiddenParamNames: Set[String] = Set(),
   ): (SSDT, Map[Int, String]) = {
 
-    val gen         = new StringGenerator(forbiddenParamNames)
+    val gen         = ParamGenerator
     val lengthParam = Map.from(useLength map (_ -> gen()))
 
     // numReadStrings 個のデータリストを区切り文字で区切って並置したものを読む。
@@ -720,15 +732,20 @@ object DataStringTransducerExamples extends App {
   println("equivalence checking examples done")
 }
 
-private class StringGenerator(private var forbidden: Set[String]) {
+private trait ParamGenerator { def apply(): String; def gen(): String = apply() }
+
+// TODO: prefix から始まるシンボルをパーサレベルで禁止する
+private object ParamGenerator extends ParamGenerator {
+  private val used: MSet[String] = MSet.empty
+  private val prefix: String     = "_$"
   private def randomString(): String = {
     import scala.util.Random
     val len = Random.between(3, 7)
-    s"rand_${List.fill(len)(Random.nextPrintableChar())}"
+    s"${prefix}${List.fill(len)(Random.nextPrintableChar())}"
   }
   def apply(): String = {
-    val res = LazyList.from(0).map(_ => randomString()).find(!forbidden(_)).get
-    forbidden += res
+    val res = LazyList.from(0).map(_ => randomString()).find(!used(_)).get
+    used.add(res)
     res
   }
 }
@@ -801,7 +818,7 @@ object DataStringTheory2 {
       val Guess = Map
 
       // generate parameters
-      val gen           = StringGenerator(t1.intParams | t2.intParams)
+      val gen           = ParamGenerator
       val j, p, isDelim = gen()
 
       enum Label                                   { case lj, lp, ld; case Wrap(x: t.ParikhLabel) }
@@ -1034,8 +1051,6 @@ private object InputFormat {
     // 各 name につき conjusts は１つ
   }
 
-  // NOTE: ArgExp の String は整数パラメタかもしれない
-  type ArgExp = Append | NilVal | Increment | String
   case class Append(names: String*)
   type Increment = (Sign, String, Int)
   enum Sign {
@@ -1092,27 +1107,29 @@ private object InputFormat {
   object AExp extends AExp_ToPresburger { type exp = this.ArithExp }
   export AExp.ArithExp
 
-  final case class FunCall(name: String, args: Seq[ArgExp])
+  // NOTE: args の String は整数パラメタかもしれない
+  final case class AuxFunCall(name: String, args: Seq[Append | NilVal | Increment | String])
 
   case class AuxFnClause(
       name: String,
       params: AuxFnParams,
-      body: Seq[(Guard, Append | NilVal | String /* リスト変数 */ | FunCall)]
+      body: Seq[(Guard, Append | NilVal | String /* リスト変数 */ | AuxFunCall)]
   )
 
   type AuxFnParams = (Seq[String], ListPattern)
 
   object NoGuard {
-    def apply(x: Append | NilVal | String | FunCall): Seq[(Guard, Append | NilVal | String | FunCall)] =
+    def apply(x: Append | NilVal | String | AuxFunCall): Seq[(Guard, Append | NilVal | String | AuxFunCall)] =
       List((Guard(Nil), x))
     def unapply(
-        xs: Seq[(Guard, Append | NilVal | String | FunCall)]
-    ): Option[Append | NilVal | String | FunCall] =
+        xs: Seq[(Guard, Append | NilVal | String | AuxFunCall)]
+    ): Option[Append | NilVal | String | AuxFunCall] =
       Option.when(xs.size == 1 && xs.head._1.conjuncts.length == 0)(xs.head._2)
   }
 
   sealed abstract class ProgramStatement
   final case class Assignment(lhs: String, rhs: FunCall) extends ProgramStatement
+  final case class FunCall(name: String, args: Seq[ArithExp | String])
 
   final case class Assumption(comparator: Comparator, lhs: Assumption.Exp, rhs: Assumption.Exp)
 
@@ -1160,21 +1177,39 @@ private object InputFormat {
         env: String => Seq[String] => SimpleStreamingDataStringTransducer2
     ): SimpleStreamingDataStringTransducer2 = {
       val delimitedStringTransducers: Seq[SimpleStreamingDataStringTransducer2] =
-        body.zipWithIndex map {
-          case (Assignment(definedVar, FunCall(funName, funArgs: Seq[String])), ithStatement) =>
-            val numReadStrings = 1 /* inputList */ + ithStatement
-            if (funName == "++") // TODO: 特別扱いされるべき関数が他にないか考える
-              SimpleStreamingDataStringTransducer2
-                .concatDelim(numReadStrings = numReadStrings, operands = funArgs map nthListName)
-            else {
-              val intArgs: Seq[String] = funArgs.init
-              val listInput: String    = funArgs.last
-              SimpleStreamingDataStringTransducer2.liftDelim(
+        body.zipWithIndex map { case (Assignment(definedVar, FunCall(funName, funArgs)), ithStatement) =>
+          val numReadStrings = 1 /* inputList */ + ithStatement
+          if (funName == "++") // TODO: 特別扱いされるべき関数が他にないか考える
+            SimpleStreamingDataStringTransducer2
+              .concatDelim(
+                numReadStrings = numReadStrings,
+                // TODO: 実行時チェックをちゃんとやる
+                operands = funArgs.asInstanceOf[Seq[String]] map nthListName
+              )
+          else {
+
+            // 関数呼び出しの引数が算術論理式 exp ならば、
+            // 名前 name を生成して、構成される SDST にパラメータとして name を、
+            // 受理論理式として exp === name を追加する。
+
+            val (intArgs, freshNameOpts, formulaOpts) = funArgs.init.map {
+              case x: String => (x, Option.empty, Option.empty)
+              case exp: ArithExp =>
+                import Presburger.{Eq, Var}
+                val name = ParamGenerator.gen()
+                (name, Option(name), Option(Eq(exp.toPresburgerTerm, Var(name))))
+            }.unzip3
+            val freshNames        = freshNameOpts.flatten
+            val conjunction       = Presburger.Conj(formulaOpts.flatten)
+            val listInput: String = funArgs.last.asInstanceOf[String] // TODO: 実行時チェックをちゃんとやる
+            SimpleStreamingDataStringTransducer2
+              .liftDelim(
                 env(funName)(intArgs),
                 numReadStrings = numReadStrings,
                 operand = nthListName(listInput)
               )
-            }
+              .addParamsAndFormula(freshNames, conjunction)
+          }
         }
       // TODO: funArgs には length 関数を含む算術式も使いたい
       val projection =
@@ -1408,8 +1443,7 @@ private object Reader {
     funcall("++")(operands map Append.apply)
   }
 
-  // type ArgExp = Append | NilVal | Increment | String
-  val auxFunCall: SListParser[FunCall] = {
+  val auxFunCall: SListParser[AuxFunCall] = {
     val increment: SListParser[Increment] = {
       val plus  = funcall("+")((symbol * int) map { case (name, value) => (Sign.Plus, name, value) })
       val minus = funcall("-")((symbol * int) map { case (name, value) => (Sign.Minus, name, value) })
@@ -1419,10 +1453,10 @@ private object Reader {
     list(for {
       name <- symbol
       args <- many(arg)
-    } yield FunCall(name, args))
+    } yield AuxFunCall(name, args))
   }
 
-  type AuxFnBody = Append | NilVal | String | FunCall // TODO: InputFormat に移動
+  type AuxFnBody = Append | NilVal | String | AuxFunCall // TODO: InputFormat に移動
   val pattern: SListParser[(String, AuxFnParams)] = list {
     val listPattern =
       reserved("nil" -> ListPattern.Nil) | funcall("cons")((symbol * symbol) map ListPattern.Cons.apply)
@@ -1459,10 +1493,15 @@ private object Reader {
     }
   }
 
+  val progFunCall: SListParser[FunCall] = list(for {
+    name <- symbol
+    args <- many(symbol | arith)
+  } yield FunCall(name, args))
+
   val assignment: SListParser[Assignment] = list(for {
     _   <- keyword("=")
     lhs <- symbol
-    rhs <- auxFunCall
+    rhs <- progFunCall
   } yield Assignment(lhs, rhs))
 
   // TODO: キーワード引数を渡す順番は交換可能であるようにする
@@ -1696,8 +1735,8 @@ private object Evaluator {
     }(Presburger.conjunctiveMonoid)
 
     DataStringTheory2.checkEquivalence(
-      t1WithLength.addParamFormula(assumptionFormula),
-      t2WithLength.addParamFormula(assumptionFormula)
+      t1WithLength.addParamFormulaExtendingParamSet(assumptionFormula),
+      t2WithLength.addParamFormulaExtendingParamSet(assumptionFormula)
     )
   }
 }
@@ -1787,7 +1826,7 @@ private object InputFormatExamples extends App {
         body = List(
           ( // ((> n 0) (t (++ acc (x)) (- n 1) xs))
             Guard(List(GuardClause("n", Inequal.Gt, ArithExp.Const(0)))),
-            FunCall("t", List(Append("acc", "x"), (Sign.Minus, "n", 1), "xs"))
+            AuxFunCall("t", List(Append("acc", "x"), (Sign.Minus, "n", 1), "xs"))
           ),
           // ((<= n 0) acc)
           (Guard(List(GuardClause("n", Inequal.Le, ArithExp.Const(0)))), "acc")
@@ -1813,7 +1852,7 @@ private object InputFormatExamples extends App {
         body = List(
           ( // ((> n 0) (rec acc (- n 1) xs))
             Guard(List(GuardClause("n", Inequal.Gt, ArithExp.Const(0)))),
-            FunCall("rec", List("acc", (Sign.Minus, "n", 1), "xs"))
+            AuxFunCall("rec", List("acc", (Sign.Minus, "n", 1), "xs"))
           ),
           // ((<= n 0) (++ (list x) xs))
           (Guard(List(GuardClause("n", Inequal.Le, ArithExp.Const(0)))), Append("x", "xs"))
@@ -1837,13 +1876,13 @@ private object InputFormatExamples extends App {
       AuxFnClause(
         "te0",
         (List("acc"), ListPattern.Cons("x", "xs")),
-        NoGuard(FunCall("te1", List("acc", "xs")))
+        NoGuard(AuxFunCall("te1", List("acc", "xs")))
       ),
       AuxFnClause("te1", (List("acc"), ListPattern.Nil), NoGuard("acc")),
       AuxFnClause(
         "te1",
         (List("acc"), ListPattern.Cons("x", "xs")),
-        NoGuard(FunCall("te0", List(Append("acc", "x"), "xs")))
+        NoGuard(AuxFunCall("te0", List(Append("acc", "x"), "xs")))
       ),
     )
   )
@@ -2101,7 +2140,7 @@ private object GuardedSDST_withShortcuts {
       } yield (name, params, guard, next)
       val (transClauses, shortClauses) = expandedConsClauses partitionMap { case cls @ (_, _, _, next) =>
         next match {
-          case x: FunCall                    => Left(cls.copy(_4 = x))
+          case x: AuxFunCall                 => Left(cls.copy(_4 = x))
           case x: (Append | NilVal | String) => Right(cls.copy(_4 = x))
         }
       }
@@ -2151,7 +2190,7 @@ private object GuardedSDST_withShortcuts {
           case name: String    => intParams(name) -> 0
         })
       val transitions = Set.from(transClauses map {
-        case (name, (params, ListPattern.Cons(hd, tl)), guard, FunCall(nextName, nextArgs)) =>
+        case (name, (params, ListPattern.Cons(hd, tl)), guard, AuxFunCall(nextName, nextArgs)) =>
           val (auxParams, intParams) = paramTranslation(params)
           // require(??? /* nextArgs の正しい位置に tl がある */ )
           // require(??? /* nextArgs の型の並びと auxFunArgs の並びが同じ */ )

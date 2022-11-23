@@ -1,0 +1,19 @@
+(defprog drop-drop
+    :param n1 n2
+    :input x
+    :inter y
+    :output z
+    :body
+    (:= y (drop n1 x))
+    (:= z (drop n2 y)))
+
+(defprog drop-sum
+    :param n1 n2
+    :input x
+    :output y
+    :body
+    (:= y (drop (+ n1 n2) x)))
+
+(equiv?! drop-drop drop-sum) ; => not equivalent
+(equiv?! drop-drop drop-sum
+         :assumption (>= n1 0) (>= n2 0)) ; => equivalent

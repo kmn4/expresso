@@ -1,0 +1,14 @@
+(defprog te-rev :input x :inter y :output z
+  :body
+  (:= y (reverse x))
+  (:= z (take-even y)))
+
+(defprog rev-te :input x :inter y :output z
+  :body
+  (:= y (take-even x))
+  (:= z (reverse y)))
+
+(equiv?! te-rev rev-te) ; not equivalent
+
+;; 奇数長の入力リストに対しては等価
+(equiv?! te-rev rev-te :assumption (= (mod length 2) 1)) ; equivalent

@@ -28,3 +28,18 @@
   :where
   ((r acc nil) acc)
   ((r acc (cons x xs)) (r (++ acc (list x)) xs)))
+
+;; 偶数番目だけを取る
+(defop (take-even l) (te0 nil l)
+  :aux-args acc input
+  :where
+  ((te0 acc nil)         acc)
+  ((te0 acc (cons x xs)) (te1 acc xs))
+  ((te1 acc nil)         acc)
+  ((te1 acc (cons x xs)) (te0 (++ acc (list x)) xs)))
+
+(defop (reverse l) (rec nil l)
+  :aux-args acc input
+  :where
+  ((rec acc nil)         acc)
+  ((rec acc (cons x xs)) (rec (++ (list x) acc) xs)))
