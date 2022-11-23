@@ -1804,7 +1804,6 @@ object Eqlisp
                 .reduceLeft(new SequenceInputStream(_, _))
             case None => System.in
           }
-        //Opts.argument[String](metavar = "script file") map ???
         inputStream map (is => REPL(is).interpretAll())
       }
     )
