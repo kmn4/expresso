@@ -134,6 +134,9 @@ abstract class SimpleStreamingDataStringTransducer2 {
     valuesListVars subsetOf listVars
   }
 
+  // 出力関係でデータを出力しない
+  require(outputRelation.forall(o => !outputSpecOf(o).exists(x => x == curr)))
+
   override def toString(): String =
     s"transitions=${transitions}" ++
       s"initialStates=${initialStates}" ++
@@ -783,6 +786,7 @@ object DataStringTheory2 {
       val p                       = pa1 intersect pa2
       p.addFormula(
         // p1 == p2 && (isDelim1 != isDelim2 || (isDelim == 0 && j1 != j2))
+        // i.e. 同じ出力位置に、データと区切り文字が来る、または両方データでオリジンが異なる
         (Var(p1) === Var(p2)) &&
           ((Var(isDelim1) !== Var(isDelim2)) ||
             ((Var(isDelim1) === 0) && (Var(j1) !== Var(j2))))
@@ -1016,6 +1020,10 @@ private object SimplePA2 {
   }
 
 }
+
+/// データリスト操作の等価性問題を記述するためのスクリプト
+
+//// 構文
 
 private sealed abstract class Comparator
 private case object Equal extends Comparator
@@ -1329,6 +1337,8 @@ private object InputCodeExamples extends App {
 (equiv?! te-rev rev-te :assumption (= (mod length 2) 1)) ; equivalent
 """
 }
+
+//// REPL
 
 private object Reader {
   def apply(string: String): Reader = new Reader(new java.io.StringReader(string))
@@ -1939,6 +1949,8 @@ private object InputFormatExamples extends App {
 
 }
 
+//// スクリプトから SDST への変換
+
 private case object restInp
 
 // 間違えて GuardedSDST として使うことがない
@@ -2282,6 +2294,12 @@ private abstract class GuardedSDST {
   val initialParikhImage: Map[ParikhLabel, ParamTerm] // 拡張 Parikh 像の仮想的な初期値
   val transitions: Set[Edge]
   val outputFunction: Map[State, Seq[ListVar]]
+
+  // requirements
+
+  private def isTotal(guard: Guard) = guard.keySet == labels
+
+  require(transitions forall (isTotal compose guardOf)) // ガードは labels の全ての要素に定義される
 
   /// concrete menber
   def srcOf(e: Edge): State         = e._1
