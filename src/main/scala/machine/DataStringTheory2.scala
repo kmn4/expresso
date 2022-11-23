@@ -336,7 +336,7 @@ object SimpleStreamingDataStringTransducer2 {
       // i != operand, (i, q0) -[d/add, 0]-> (i, q0)
       // i != operand, (i, q0) -[#/add, 0]-> (i+1, q0)
       val notOperand = for {
-        i   <- 0 to numReadStrings if i != operand
+        i   <- 0 until numReadStrings if i != operand
         sym <- Seq(curr, delim)
       } yield {
         val next = sym match { case `curr` => 0; case `delim` => 1 }
