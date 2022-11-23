@@ -2018,9 +2018,9 @@ private abstract class GuardedSDST_withShortcuts {
       val substitute: Seq[Cop[ListVar, currPtr.type | restInp.type]] => Seq[NewListVar] = { xs =>
         val cntCurr, cntRest = Counter(-1)
         xs map {
-          case Cop2(x) if x == currPtr => NewListVar.Curr(cntCurr.add1)
-          case Cop2(x) if x == restInp => NewListVar.Rest(cntRest.add1)
-          case Cop1(x)                 => x.injected
+          case Cop2(`currPtr`) => NewListVar.Curr(cntCurr.add1)
+          case Cop2(`restInp`) => NewListVar.Rest(cntRest.add1)
+          case Cop1(x)         => x.injected
         }
       }
       val loop = NewState.New(d)
