@@ -1,5 +1,6 @@
 package com.github.kmn4.expresso.machine
 
+import java.io.{InputStream, FileInputStream, SequenceInputStream}
 import collection.mutable.{Map as MMap, Set as MSet}
 
 import com.github.kmn4.expresso
@@ -502,6 +503,9 @@ private class PresburgerFormulaSugarForParikhAutomaton[I, L] extends PresSugar[E
 // セマンティクスの定義
 object SDSTSemantics {
 
+  class OutputNotDefinedException             extends Exception
+  class MultipleOutputExistsException(x: Any) extends Exception
+
   import CurrOrDelim.{curr, delim}
   type DataOrDelimSeq = Seq[Either[Int, delim.type]]
   def seq(xs: Any*): DataOrDelimSeq = xs.collect {
@@ -509,6 +513,8 @@ object SDSTSemantics {
     case `delim` => Right(delim)
   }
   val :# = delim
+  def transduce(t: SimpleStreamingDataStringTransducer2, xs: DataOrDelimSeq): DataOrDelimSeq =
+    transduce(t, Map(), xs)
   def transduce(
       t: SimpleStreamingDataStringTransducer2,
       args: Map[String, Int],
@@ -581,7 +587,8 @@ object SDSTSemantics {
         solver.check() == z3.Status.SATISFIABLE
       }
     }
-    assert(result.size == 1, result)
+    if (result.size == 0) throw new OutputNotDefinedException
+    else if (result.size >= 2) throw new MultipleOutputExistsException(result)
     result.head._1
   }
 
@@ -605,6 +612,9 @@ private object SemanticsSpecs {
       val result   = transduce(machine, Map(nDrop -> i), seq(1, 2, 3))
       assert(expected == result, s"${i}: got ${result} but ${expected} expected")
     }
+    assert(transduce(machine, Map(nDrop -> 3), seq()) == seq())
+    assert(transduce(machine, Map(nDrop -> 0), seq()) == seq())
+    assert(transduce(machine, Map(nDrop -> -10), seq()) == seq())
   }
 
   def takeEven(machine: SimpleStreamingDataStringTransducer2) = {
@@ -637,6 +647,11 @@ private object SemanticsSpecs {
     assert(transduce(machine, Map.empty, seq()) == seq())
   }
 
+  def identity(machine: SimpleStreamingDataStringTransducer2) = {
+    assert(transduce(machine, Map.empty, seq(1, 2, 3)) == seq(1, 2, 3))
+    assert(transduce(machine, Map.empty, seq()) == seq())
+  }
+
 }
 
 object DataStringTransducerExamples extends App {
@@ -658,24 +673,7 @@ object DataStringTransducerExamples extends App {
 
   val i = "n"
 
-  val (tak, drp, takeDrop) = {
-    import InputCodeExamples.{defop_take, defop_drop, defprog_concatSplit}
-    val repl = REPL(defop_take ++ defop_drop ++ defprog_concatSplit)
-    repl.setOptions(REPL.Options(print = false))
-    repl.interpretAll()
-    (repl.makeSDST("take", i), repl.makeSDST("drop", i), repl.getSDST("concat-split"))
-  }
-
-  SemanticsSpecs.take(tak, i)
-  SemanticsSpecs.drop(drp, i)
-
-  def concatSplitSpec(machine: SimpleStreamingDataStringTransducer2) = {
-    assert(transduce(machine, Map(i -> -2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
-    assert(transduce(machine, Map(i -> 2), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
-    assert(transduce(machine, Map(i -> 5), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
-  }
-
-  concatSplitSpec(takeDrop)
+  val takeDrop = DefprogMachines.concatSplit
 
   assert(transduce(concat, Map(), seq(1, :#, 2, :#, 3, :#)) == seq(1, :#, 2, :#, 3, :#, 2, 3, :#))
   assert(transduce(projId, Map(), seq(1, 2, 3, :#)) == seq(1, 2, 3, :#))
@@ -706,8 +704,6 @@ object DataStringTransducerExamples extends App {
   assert(checkEquivalence(reverseIdentity1, reverseIdentity3))
   assert(!checkEquivalence(duplicate, reverseIdentity1))
   assert(checkEquivalence(compose(reverse, reverse), identity))
-  assert(checkFunctionality(tak))
-  assert(checkFunctionality(drp))
   def printSize(t: SimpleStreamingDataStringTransducer2): Unit =
     println(
       s"|Q| = ${t.states.size}" ++
@@ -723,10 +719,6 @@ object DataStringTransducerExamples extends App {
   // assert(checkFunctionality(comp))
   assert(checkEquivalence(delimId, takeDrop))
   // 特殊化された take, drop を使う例
-  printTime("tak =equiv? drp")
-  assert(!checkEquivalence(tak, drp))
-  printTime("tak =equiv? identity")
-  assert(!checkEquivalence(tak, identity))
   printTime("func? takeDrop")
   assert(checkFunctionality(takeDrop)) // この場合は 5 分程度で決定できる
   printTime("delimID =equiv? takeDrop")
@@ -1371,40 +1363,6 @@ private object InputCodeExamples extends App {
 (equiv?! concat-split identity)
 """
 
-  val script_01 =
-    defop_take ++ defop_drop ++ defop_identity ++ defprog_concatSplit ++ defprog_identity ++ equiv_concatSplit_identity
-
-  val script_02 = """
-;; 偶数番目だけを取る
-(defop (take-even l) (te0 nil l)
-  :aux-args acc input
-  :where
-  ((te0 acc nil)         acc)
-  ((te0 acc (cons x xs)) (te1 acc xs))
-  ((te1 acc nil)         acc)
-  ((te1 acc (cons x xs)) (te0 (++ acc (list x)) xs)))
-
-(defop (reverse l) (rec nil l)
-  :aux-args acc input
-  :where
-  ((rec acc nil)         acc)
-  ((rec acc (cons x xs)) (rec (++ (list x) acc) xs)))
-
-(defprog te-rev :input x :inter y :output z
-  :body
-  (:= y (reverse x))
-  (:= z (take-even y)))
-
-(defprog rev-te :input x :inter y :output z
-  :body
-  (:= y (take-even x))
-  (:= z (reverse y)))
-
-(equiv?! te-rev rev-te) ; not equivalent
-
-;; 奇数長の入力リストに対しては等価
-(equiv?! te-rev rev-te :assumption (= (mod length 2) 1)) ; equivalent
-"""
 }
 
 //// REPL
@@ -1657,39 +1615,44 @@ private object Reader {
     }
     def apply(xs: Seq[SExpr]) = length(xs) ++ variable(xs) ++ const(xs) ++ bop(xs)
   }
-  val assumptions: SListParser[Seq[Assumption]] = keywordArgs("assumption")(many(list(for {
+  val assumptions: SListParser[Seq[Assumption]] = many(list(for {
     comp <- comparator
     lhs  <- assumptionExp
     rhs  <- assumptionExp
-  } yield Assumption(comp, lhs, rhs))))
+  } yield Assumption(comp, lhs, rhs)))
 
   val equiv: SListParser[Command] = list {
     for {
       _           <- constSymbol("equiv?!")
       name1       <- symbol
       name2       <- symbol
-      assumptions <- optionSeq(assumptions)
+      assumptions <- optionSeq(keywordArgs("assumption")(assumptions))
     } yield CheckEquiv(name1, name2, assumptions)
   }
 
-  def read[A](p: SListParser[A])(sexpr: SExpr): Option[A] = p.parse(ParserSeqImpl(sexpr))
+  def read[A](p: SListParser[A])(xs: Seq[SExpr]): Option[A] = p.parse(xs)
 
-  val readCommand: SExpr => Option[Command] = read(defop | defprog | equiv)
+  val readCommand: SExpr => Option[Command] = read(defop | defprog | equiv) compose (x => ParserSeqImpl(x))
+
+  import smtlib.parser.ParserCommon
+  import smtlib.lexer.Lexer
+
+  class SExprParser(val lexer: Lexer) extends ParserCommon {
+    def current = peekToken
+    def parseAllSExpr = ParserSeqImpl.unfold(current) { token =>
+      if (token != null) Option((parseSExpr, current))
+      else None
+    }
+  }
 
 }
 
 private class Reader(private val reader: java.io.Reader) {
 
+  import smtlib.lexer.Lexer
   import InputFormat.Command
-  import smtlib.parser.ParserCommon
-  import smtlib.lexer.{Lexer, Tokens}
-  import reflect.Selectable.reflectiveSelectable
 
-  private class SExprParser(val lexer: Lexer) extends ParserCommon {
-    def current = peekToken
-  }
-
-  private val parser = new SExprParser(new Lexer(reader))
+  private val parser = new Reader.SExprParser(new Lexer(reader))
 
   // private def readSExpr = parser.parseSExpr
   private def readSExpr = Option.when(parser.current != null)(parser.parseSExpr)
@@ -1699,28 +1662,34 @@ private class Reader(private val reader: java.io.Reader) {
 
 }
 
-private object ReaderExamples extends App {
+private object ReaderRunner {
 
   export Reader._
 
-  import InputCodeExamples._
   import smtlib.parser.ParserCommon
   import smtlib.lexer.Lexer
 
-  def parseSExprInString(w: String) = {
+  def parseAllSExpr(w: String) = {
     val reader = new java.io.StringReader(w)
-    val parser = new ParserCommon { val lexer = new Lexer(reader) }
-    parser.parseSExpr
+    val parser = new Reader.SExprParser(new Lexer(reader))
+    parser.parseAllSExpr
   }
 
-  def readInString[A](p: SListParser[A])(code: String): Option[A] = read(p)(parseSExprInString(code))
+  def read[A](p: SListParser[A])(code: String): Option[A] = read(p)(parseAllSExpr(code))
 
   def readAndPrint[A](p: SListParser[A])(code: String): Unit = {
     println(";;; read")
     println(code)
     println(";;; result")
-    println(readInString(p)(code))
+    println(read(p)(code))
   }
+
+}
+
+private object ReaderExamples extends App {
+
+  import ReaderRunner._
+  import InputCodeExamples._
 
   readAndPrint(defop)(code = defop_take)
   readAndPrint(defop)(code = defop_drop)
@@ -1862,6 +1831,13 @@ private object REPL {
   def apply(file: java.io.File): REPL      = new REPL(new java.io.FileReader(file))
   def apply(is: java.io.InputStream): REPL = new REPL(new java.io.InputStreamReader(is))
 
+  def interpretAllSilently(is: java.io.InputStream): REPL = {
+    val repl = REPL(is)
+    repl.setOptions(REPL.Options(print = false))
+    repl.interpretAll()
+    repl
+  }
+
   case class Options(print: Boolean = true)
 }
 
@@ -1873,7 +1849,6 @@ object Eqlisp
       header = "decide equivalence of list programs",
       main = {
         import decline._
-        import java.io.{InputStream, FileInputStream, SequenceInputStream}
         import java.nio.file.Path
         // 複数ファイルを指定可能。
         // 省略されていたら標準入力。
@@ -1891,10 +1866,44 @@ object Eqlisp
       }
     )
 
-private object REPLExamples extends App {
-  import InputCodeExamples._
-  REPL(script_01).interpretAll()
-  REPL(script_02).interpretAll()
+object InputCodeStreams {
+  def fromFile(name: String): InputStream = new FileInputStream(name)
+
+  def funcs = fromFile("./eqlisp/funcs.eql")
+  def progs = fromFile("./eqlisp/progs.eql")
+
+}
+
+extension (self: InputStream) {
+  def ++(that: InputStream): InputStream = new SequenceInputStream(self, that)
+}
+
+object DefopMachines {
+
+  val repl = REPL.interpretAllSilently(InputCodeStreams.funcs)
+
+  def take(i: String) = repl.makeSDST("take", i)
+  def drop(i: String) = repl.makeSDST("drop", i)
+  val takeEven        = repl.makeSDST("take-even")
+  val reverse         = repl.makeSDST("reverse")
+  val identity        = repl.makeSDST("identity")
+
+}
+
+object DefprogMachines {
+
+  val repl = REPL.interpretAllSilently(InputCodeStreams.funcs ++ InputCodeStreams.progs)
+
+  val concatSplit      = repl.getSDST("concat-split")
+  val identity         = repl.getSDST("identity")
+  val takeEven_reverse = repl.getSDST("te-rev")
+  val reverse_takeEven = repl.getSDST("rev-te")
+  val dropDrop         = repl.getSDST("drop-drop")
+  val dropSum          = repl.getSDST("drop-sum")
+  val dropReverse      = repl.getSDST("drop-reverse")
+  val reverseTake      = repl.getSDST("reverse-take")
+  val takeAll          = repl.getSDST("take-all")
+
 }
 
 private object InputFormatExamples extends App {
