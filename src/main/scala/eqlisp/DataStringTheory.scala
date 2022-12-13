@@ -4,8 +4,11 @@ import com.github.kmn4.expresso
 import com.github.kmn4.expresso.math.Presburger.{Var, Formula => PresFormula}
 import com.github.kmn4.expresso.machine.{NSST, ParikhAutomaton}
 
+// WARN: this file is NOT in use
+
 /** D はデータドメイン、I は入力シンボル、O は出力シンボル。
   */
+@deprecated
 abstract class StreamingDataStringTransducer[D, I, O] protected {
 
   // abstract members
@@ -65,6 +68,7 @@ abstract class StreamingDataStringTransducer[D, I, O] protected {
   def edgesTo(q: State): Set[Edge] = _edgesTo.getOrElseUpdate(q, transitions.filter(dstOf(_) == q))
 }
 
+@deprecated
 abstract class SimpleStreamingDataStringTransducer[D] extends StreamingDataStringTransducer[D, Unit, Unit] {
   type DataVar = Unit
   lazy val inputTags: Set[types.InputTag]   = Set(())
@@ -73,6 +77,7 @@ abstract class SimpleStreamingDataStringTransducer[D] extends StreamingDataStrin
   lazy val curr: DataVar                    = ()
 }
 
+@deprecated
 object SimpleStreamingDataStringTransducer { outer =>
 
   trait SimpleDatastringTypes[X] extends DatastringTypes[Unit, X, Unit]
@@ -269,6 +274,7 @@ object SimpleStreamingDataStringTransducer { outer =>
   private def singleStateConstructionScheme[D](): SimpleStreamingDataStringTransducer[D] = ???
 }
 
+@deprecated
 trait DatastringTypes[O, X, V] {
   type OutputTag = O
   type ListVar   = X
@@ -334,6 +340,7 @@ trait DatastringTypes[O, X, V] {
   }
 }
 
+@deprecated
 trait DatastringTransducerTypes[I, O, Q, X, V] extends DatastringTypes[O, X, V] {
   type Edge     = (State, InputTag, Guard, Update, State)
   type State    = Q
@@ -343,11 +350,13 @@ trait DatastringTransducerTypes[I, O, Q, X, V] extends DatastringTypes[O, X, V] 
 
 /** `D` は少なくとも2つの値を持つ。 `one != two` である必要がある。
   */
+@deprecated
 trait AtLeastTwo[D] {
   def one: D
   def two: D
 }
 
+@deprecated
 object AtLeastTwo {
   implicit val booleanAL2: AtLeastTwo[Boolean] = new AtLeastTwo[Boolean] {
     def one: Boolean = true
@@ -355,6 +364,7 @@ object AtLeastTwo {
   }
 }
 
+@deprecated
 object DataStringTheoryExamples extends App {
   type D = Boolean
   val theory = new DataStringTheory[D]
@@ -379,6 +389,7 @@ object DataStringTheoryExamples extends App {
 }
 
 // checkEquivalenceSimple が健全であるために `AtLeastTwo` が必要。
+@deprecated
 class DataStringTheory[D: AtLeastTwo] {
   type SSDT = SimpleStreamingDataStringTransducer[D]
 
@@ -574,6 +585,7 @@ class DataStringTheory[D: AtLeastTwo] {
   }
 }
 
+@deprecated
 abstract class SimplePA[I] { outer =>
   type State
   type Label
@@ -594,6 +606,7 @@ abstract class SimplePA[I] { outer =>
   }
 }
 
+@deprecated
 object SimplePA {
 
   // 拡張したのは、今のところ初期状態が複数ありうるということだけ
