@@ -1,7 +1,8 @@
-package com.github.kmn4.expresso.machine
+package com.github.kmn4.expresso.eqlisp
 
 import com.github.kmn4.expresso
 import com.github.kmn4.expresso.math.Presburger.{Var, Formula => PresFormula}
+import com.github.kmn4.expresso.machine.{NSST, ParikhAutomaton}
 
 /** D はデータドメイン、I は入力シンボル、O は出力シンボル。
   */

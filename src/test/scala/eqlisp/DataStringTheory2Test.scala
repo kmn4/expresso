@@ -1,4 +1,4 @@
-package com.github.kmn4.expresso.machine
+package com.github.kmn4.expresso.eqlisp
 
 import org.scalatest.funsuite.AnyFunSuite
 
