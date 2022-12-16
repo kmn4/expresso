@@ -655,6 +655,20 @@ private object SemanticsSpecs {
     assert(transduce(machine, Map.empty, seq()) == seq())
   }
 
+  def swap(machine: SimpleStreamingDataStringTransducer2, ith: String, jth: String) = {
+    def reference(i: Int, j: Int, l: Seq[Int]): Seq[Int] = {
+      val max = math.max(i, j)
+      val min = math.min(i, j)
+      if (0 <= min && max < l.length)
+        l.slice(0, min) ++ Seq(l(max)) ++ l.slice(min + 1, max) ++ Seq(l(min)) ++ l.slice(max + 1, l.length)
+      else l
+    }
+    for (i <- -2 to 4; j <- -2 to 4) {
+      val expected = seq(reference(i, j, List(1, 2, 3)): _*)
+      val result   = transduce(machine, Map(ith -> i, jth -> j), seq(1, 2, 3))
+      assert(expected == result, s"($i, $j): got ${result} but ${expected} expected")
+    }
+  }
 }
 
 object DataStringTransducerExamples extends App {
@@ -717,7 +731,6 @@ object DataStringTransducerExamples extends App {
   assert(checkEquivalence(delimRevRev, delimId))
   // NOTE: comp の functionality 判定は Z3 による充足可能性判定が終わらない。
   // 構成される Parikh オートマトンは 1000 状態 20000 遷移程度
-  def printTime(): Unit            = println(new java.util.Date(System.currentTimeMillis()))
   def printTime(msg: String): Unit = println(s"${new java.util.Date(System.currentTimeMillis())}: $msg")
   // assert(checkFunctionality(comp))
   assert(checkEquivalence(delimId, takeDrop))
@@ -754,13 +767,29 @@ object DataStringTheory2 {
   private type SSDT = SimpleStreamingDataStringTransducer2
   private val SSDT = SimpleStreamingDataStringTransducer2
 
+  extension [M: Monoid](self: (M, Boolean)) {
+    def unary_! : (M, Boolean) = {
+      val (m, b) = self
+      (m, !b)
+    }
+    def ||(that: => (M, Boolean)): (M, Boolean) = {
+      val (m, b) = self
+      if (b) self
+      else {
+        val (n, c) = that
+        (Monoid[M].combine(m, n), c)
+      }
+    }
+  }
+
   /** t1 をしてから t2 をする合成 */
   def compose(t1: SSDT, t2: SSDT): SSDT =
     SSDT(t1.internalSST compose t2.internalSST)
   def composeLeft(transducers: SSDT*): SSDT =
     transducers.reduceLeft(compose)
-  def checkFunctionality(t: SSDT): Boolean = checkEquivalence(t, t)
-  def checkEquivalence(t1: SSDT, t2: SSDT): Boolean = {
+  def checkFunctionality(t: SSDT): Boolean          = checkEquivalence(t, t)
+  def checkEquivalence(t1: SSDT, t2: SSDT): Boolean = checkEquivalence1(t1, t2)._2
+  private[eqlisp] def checkEquivalence1(t1: SSDT, t2: SSDT) = {
     // NOTE: 定義域の等価性は省略している
 
     import Presburger.Sugar._
@@ -768,29 +797,37 @@ object DataStringTheory2 {
 
     def notEquiv = differByLength || differAtSomePosition
 
-    def differByLength: Boolean = {
-      val toParikhAutomaton = parikhAutomatonConstructionScheme(endOfOutput) _
-      val (pa1, _, p1, _)   = toParikhAutomaton(t1)
-      val (pa2, _, p2, _)   = toParikhAutomaton(t2)
-      val p                 = pa1 intersect pa2
-      p.addFormula(Var(p1) !== Var(p2)).internal.ilVectorOption.nonEmpty
-    }
-    def differAtSomePosition: Boolean = {
-      // 結果の PA が w を受理するなら、t に w を与えるとその j 文字目が出力の "p" 文字目に現れる
-      val toParikhAutomaton       = parikhAutomatonConstructionScheme(someInternalPosition) _
+    def checkingScheme(
+        pPointsTo: Position,
+        makeAdditionalFormula: (
+            (String, String, String),
+            (String, String, String)
+        ) => Presburger.Formula[String],
+    ): (Seq[SimplePA2[String]], Boolean) = {
+      // 結果の PA が w を受理するなら、t に w を与えるとその j 文字目が出力の "p" に現れる
+      val toParikhAutomaton       = parikhAutomatonConstructionScheme(pPointsTo) _
       val (pa1, j1, p1, isDelim1) = toParikhAutomaton(t1)
       val (pa2, j2, p2, isDelim2) = toParikhAutomaton(t2)
-      val p                       = pa1 intersect pa2
-      p.addFormula(
+      val pa = (pa1 intersect pa2).addFormula(makeAdditionalFormula((j1, p1, isDelim1), (j2, p2, isDelim2)))
+      val result = pa.internal.ilVectorOption.nonEmpty
+      (List(pa), result)
+    }
+
+    def differByLength = checkingScheme(
+      pPointsTo = endOfOutput,
+      makeAdditionalFormula = { case ((_, p1, _), (_, p2, _)) => Var(p1) !== Var(p2) },
+    )
+    def differAtSomePosition = checkingScheme(
+      pPointsTo = someInternalPosition,
+      makeAdditionalFormula = { case ((j1, p1, isDelim1), (j2, p2, isDelim2)) =>
         // p1 == p2 && (isDelim1 != isDelim2 || (isDelim == 0 && j1 != j2))
         // i.e. 同じ出力位置に、データと区切り文字が来る、または両方データでオリジンが異なる
         (Var(p1) === Var(p2)) &&
           ((Var(isDelim1) !== Var(isDelim2)) ||
             ((Var(isDelim1) === 0) && (Var(j1) !== Var(j2))))
-      ).internal
-        .ilVectorOption
-        .nonEmpty
-    }
+      },
+    )
+
     sealed trait Position
     case object someInternalPosition extends Position
     case object endOfOutput          extends Position
@@ -973,6 +1010,7 @@ private abstract class SimplePA2[I] { outer =>
       orig.copy(acceptFormulas = fm +: orig.acceptFormulas)
     }
   }
+  export internal.{states, edges as transitions}
 }
 
 private object SimplePA2 {

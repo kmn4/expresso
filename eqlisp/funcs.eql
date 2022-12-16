@@ -1,17 +1,9 @@
-;; defop -- define operator
-;; 引数は整数が先で、最後は必ず入力リスト。
-;;      シグネチャ   定義
 (defop (take n l) (rec nil n l)
-  ;; 補助関数の引数の種類のリスト
-  ;; acc   - 蓄積 (accumulator) であり、SDST のリスト変数に対応する
-  ;; param - 整数パラメタ
-  ;; input - 入力リスト
   :aux-args acc param input
-  :where ; 補助関数の定義たち
-  ;; 各節の car は関数名、引数名と、入力リストについてのパターンマッチを持つ。
-  ((rec acc n nil) acc)    ; 入力リストが空
-  ((rec acc n (cons x xs)) ; 入力リストが非空
-   (cond ; 整数引数に関するガードによる場合分け
+  :where
+  ((rec acc n nil) acc)
+  ((rec acc n (cons x xs))
+   (cond
     ((> n 0)  (rec (++ acc (list x)) (- n 1) xs))
     ((<= n 0) acc))))
 
@@ -43,3 +35,37 @@
   :where
   ((rec acc nil)         acc)
   ((rec acc (cons x xs)) (rec (++ (list x) acc) xs)))
+
+;; やや不完全な swap の定義。
+;; 0 <= i, j < 入力長 なら、i番目とj番目を入れ替える。
+;; i < 0 のときは i = 0 と同じように振る舞う。
+;; j < 0 のときは j = 0 と同じように振る舞う。
+;; i または j が入力の長さより大きいときは何もしない。
+;; 補助関数 g や h の定義における網羅性を欠く部分が
+;; 全域性を損なわないことは、ユーザが保証しなければならない。
+(defop (swap i j l) (f i j nil nil nil l)
+  :aux-args param param acc acc acc input
+  :where
+  ((f i j pre ith mid nil) pre)
+  ((f i j pre ith mid (cons x xs))
+   (cond
+     ((and (> i 0) (> j 0)) (f (- i 1) (- j 1) (++ pre (list x)) ith mid xs))
+     ((and (<= i 0) (> j 0)) (g i (- j 1) pre (++ (list x)) mid xs))
+     ((and (> i 0) (<= j 0)) (h (- i 1) j pre (++ (list x)) mid xs))
+     ((and (<= i 0) (<= j 0)) (++ pre (list x) xs))
+     ))
+  ((g i j pre ith mid nil) (++ pre ith mid))
+  ((g i j pre ith mid (cons x xs))
+   (cond
+     ((and (<= i 0) (> j 0)) (g i (- j 1) pre ith (++ mid (list x)) xs))
+     ((and (<= i 0) (<= j 0)) (++ pre (list x) mid ith xs))
+     ;; 網羅的でない
+     ))
+  ((h i j pre jth mid nil) (++ pre jth mid))
+  ((h i j pre jth mid (cons x xs))
+   (cond
+     ((and (<= j 0) (> i 0)) (h (- i 1) j pre jth (++ mid (list x)) xs))
+     ((and (<= j 0) (<= i 0)) (++ pre (list x) mid jth xs))
+     ;; 網羅的でない
+     ))
+  )

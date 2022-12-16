@@ -1,0 +1,11 @@
+(defprog double-double
+    :input inp :inter double :output quad
+    :body
+    (:= double (++ inp inp))
+    (:= quad (++ double double)))
+
+(defprog quadruple
+    :input inp :output quad
+    :body (:= quad (++ inp inp inp inp)))
+
+(equiv?! double-double quadruple)

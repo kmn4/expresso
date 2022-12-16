@@ -9,6 +9,7 @@ import com.github.kmn4.expresso.math.Cop2
 import com.github.kmn4.expresso.math.Monoid
 import com.github.kmn4.expresso.math.Presburger
 import com.monovore.decline
+import cats.implicits._
 
 import java.io.FileInputStream
 import java.io.InputStream
@@ -723,11 +724,15 @@ private class Evaluator {
       t2: SimpleStreamingDataStringTransducer2,
       assumptions: Seq[Assumption]
   ) = {
-    if (Evaluator.checkEquiv(t1, t2, assumptions)) println("equivalent")
+    if (Evaluator.checkEquiv(t1, t2, assumptions, printMachineSummary)) println("equivalent")
     else println("not equivalent")
   }
 
   // for tests and debugging
+
+  var printMachineSummary = false
+
+  def setPrint(arg: Boolean) = printMachineSummary = arg
 
   def makeSDST(name: String, paramNames: String*): SimpleStreamingDataStringTransducer2 =
     sdstScheme(name)(paramNames)
@@ -747,9 +752,21 @@ private object Evaluator {
   def checkEquiv(
       t1: SimpleStreamingDataStringTransducer2,
       t2: SimpleStreamingDataStringTransducer2,
-      assumptions: Seq[Assumption]
+      assumptions: Seq[Assumption],
+      printMachineSummary: Boolean = false,
   ): Boolean = {
-    if (assumptions.isEmpty) return DataStringTheory2.checkEquivalence(t1, t2)
+    def check(t1: SimpleStreamingDataStringTransducer2, t2: SimpleStreamingDataStringTransducer2): Boolean = {
+      if (printMachineSummary) {
+        println(s">SDST\t|Q|=${t1.states.size}\t|Δ|=${t1.transitions.size}")
+        println(s">SDST\t|Q|=${t2.states.size}\t|Δ|=${t2.transitions.size}")
+      }
+      val (automata, result) = DataStringTheory2.checkEquivalence1(t1, t2)
+      if (printMachineSummary)
+        for (x <- automata)
+          println(s">ParikhAutomaton\t|Q|=${x.states.size}\t|Δ|=${x.transitions.size}")
+      result
+    }
+    if (assumptions.isEmpty) return check(t1, t2)
 
     // 入力リストのデータ数をカウントするトランスデューサを左から合成する
 
@@ -797,7 +814,7 @@ private object Evaluator {
       makeFormula(lterm, rterm)
     }(Presburger.conjunctiveMonoid)
 
-    DataStringTheory2.checkEquivalence(
+    check(
       t1WithLength.addParamFormulaExtendingParamSet(assumptionFormula),
       t2WithLength.addParamFormulaExtendingParamSet(assumptionFormula)
     )
@@ -809,6 +826,10 @@ private class REPL(reader: java.io.Reader) {
   private val read = new Reader(reader)
   private val eval = new Evaluator
 
+  private val timeFmt                = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
+  private def now(): String          = java.time.LocalTime.now().format(timeFmt)
+  private def log(msg: String): Unit = Predef.println(s"${now()}\t$msg")
+
   def interpretOne(): Option[Unit] = read() map eval.apply map this.println
 
   def interpretAll(): Unit = interpretOne() foreach (_ => interpretAll())
@@ -817,9 +838,19 @@ private class REPL(reader: java.io.Reader) {
 
   private var options = REPL.Options()
 
-  def println(x: Any): Unit = if (options.print) Predef.println(x) else ()
+  private def println(x: Any): Unit = options.print match {
+    case REPL.PrintOption.WithTime => log(x.toString)
+    case REPL.PrintOption.Println  => Predef.println(x)
+    case REPL.PrintOption.None     => ()
+  }
 
-  def setOptions(opts: REPL.Options = REPL.Options()) = options = opts
+  def setOptions(
+      print: Option[REPL.PrintOption] = None,
+      printMachineSummary: Option[Boolean] = None,
+  ) = {
+    print foreach (arg => options = options.copy(print = arg))
+    printMachineSummary foreach (arg => eval.setPrint(arg))
+  }
 
   // for tests and debugging
 
@@ -834,12 +865,15 @@ private object REPL {
 
   def interpretAllSilently(is: java.io.InputStream): REPL = {
     val repl = REPL(is)
-    repl.setOptions(REPL.Options(print = false))
+    repl.setOptions(print = Some(PrintOption.None))
     repl.interpretAll()
     repl
   }
 
-  case class Options(print: Boolean = true)
+  case class Options(
+      print: PrintOption = PrintOption.Println,
+  )
+  enum PrintOption { case Println, WithTime, None }
 }
 
 object Eqlisp
@@ -861,7 +895,18 @@ object Eqlisp
                 .reduceLeft(new SequenceInputStream(_, _))
             case None => System.in
           }
-        inputStream map (is => REPL(is).interpretAll())
+        val loggingWithTime: Opts[Boolean] = Opts
+          .flag("logging-with-time", "prepend local time string to each line of output")
+          .orFalse
+        val printMachineSummary: Opts[Boolean] = Opts
+          .flag("print-machine-summary", "print size of state sets and transition sets")
+          .orFalse
+        (inputStream, loggingWithTime, printMachineSummary) mapN { case (is, lwt, pms) =>
+          val repl = REPL(is)
+          if (lwt) repl.setOptions(print = Some(REPL.PrintOption.WithTime))
+          if (pms) repl.setOptions(printMachineSummary = Some(true))
+          repl.interpretAll()
+        }
       }
     )
 
@@ -881,11 +926,12 @@ object DefopMachines {
 
   val repl = REPL.interpretAllSilently(InputCodeStreams.funcs)
 
-  def take(i: String) = repl.makeSDST("take", i)
-  def drop(i: String) = repl.makeSDST("drop", i)
-  val takeEven        = repl.makeSDST("take-even")
-  val reverse         = repl.makeSDST("reverse")
-  val identity        = repl.makeSDST("identity")
+  def take(i: String)            = repl.makeSDST("take", i)
+  def drop(i: String)            = repl.makeSDST("drop", i)
+  val takeEven                   = repl.makeSDST("take-even")
+  val reverse                    = repl.makeSDST("reverse")
+  val identity                   = repl.makeSDST("identity")
+  def swap(i: String, j: String) = repl.makeSDST("swap", i, j)
 
 }
 

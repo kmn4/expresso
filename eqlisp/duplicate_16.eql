@@ -1,0 +1,16 @@
+(defprog double^4
+    :input inp :inter x2 x4 x8 :output x16
+    :body
+    (:= x2 (++ inp inp))
+    (:= x4 (++ x2 x2))
+    (:= x8 (++ x4 x4))
+    (:= x16 (++ x8 x8))
+    )
+
+(defprog duplicate16
+    :input inp :output out
+    :body (:= out (++ inp inp inp inp inp inp inp inp
+                      inp inp inp inp inp inp inp inp
+                      )))
+
+(equiv?! double^4 duplicate16)

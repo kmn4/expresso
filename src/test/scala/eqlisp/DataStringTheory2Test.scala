@@ -26,6 +26,7 @@ class DataStringTheory2Test extends AnyFunSuite {
   test("defop take-even semantics") { SemanticsSpecs.takeEven(Defop.takeEven) }
   test("defop reverse semantics") { SemanticsSpecs.reverse(Defop.reverse) }
   test("defop identity semantics") { SemanticsSpecs.identity(Defop.identity) }
+  ignore("defop swap semantics") { SemanticsSpecs.swap(Defop.swap("i", "j"), "i", "j") }
 
   // defprog semantics
   def concatSplitSpec(machine: SimpleStreamingDataStringTransducer2, i: String) = {

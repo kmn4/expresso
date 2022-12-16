@@ -1,0 +1,13 @@
+;; concat-split が関数的であることを確認する
+
+(defprog concat-split
+  :param n
+  :input inp
+  :inter x y
+  :output z
+  :body
+  (:= x (take n inp))
+  (:= y (drop n inp))
+  (:= z (++ x y)))
+
+(equiv?! concat-split concat-split)

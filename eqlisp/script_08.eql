@@ -1,0 +1,8 @@
+(defprog swap_ij
+    :param i j :input inp :output out
+    :body (:= out (swap i j inp)))
+
+(defprog identity :input inp :output out :body (:= out (identity inp)))
+
+(equiv?! swap_ij identity)
+(equiv?! swap_ij swap_ij)

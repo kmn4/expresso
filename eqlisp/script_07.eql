@@ -1,0 +1,5 @@
+(defprog identity :input inp :output out :body (:= out (identity inp)))
+(defprog reverse :input inp :output out :body (:= out (reverse inp)))
+(equiv?! identity reverse)
+(equiv?! identity identity)
+(equiv?! reverse reverse)
