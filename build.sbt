@@ -34,6 +34,6 @@ fork in Test         := true
 cancelable in Global := true
 
 assembly / test      := {}
-assembly / mainClass := Some("com.github.kmn4.expresso.machine.Eqlisp")
+assembly / mainClass := Some("com.github.kmn4.expresso.eqlisp.Eqlisp")
 
 run / javaOptions += "-Xss8m"
