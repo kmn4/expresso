@@ -1,5 +1,7 @@
 package com.github.kmn4.expresso
 
+import scala.util.control.NonLocalReturns._
+
 object TopSort {
   case class Graph[A](nodes: Iterable[A], next: Map[A, Iterable[A]])
   def sort[A](graph: Graph[A]): Option[Seq[A]] // a -> b なら idx(a) > idx(b)
@@ -11,12 +13,12 @@ object TopSort {
       numbered += a
       res.append(a)
     }
-    def dfs(node: A): Boolean /* 循環を検知したら true */ = {
+    def dfs(node: A): Boolean /* 循環を検知したら true */ = returning {
       visited += node
       for (a <- graph.next(node) if !numbered(a))
-        if (visited(a) || dfs(a)) return true
+        if (visited(a) || dfs(a)) throwReturn(true)
       number(node)
-      return false
+      throwReturn(false)
     }
     var toVisit = graph.nodes.toSet
     while (toVisit.nonEmpty) {

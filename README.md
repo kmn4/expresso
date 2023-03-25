@@ -18,24 +18,23 @@ docker run --rm -i -v $(pwd):/workdir kamasaki/expresso:jssst2021 CONSTRAINT [ST
 
 ## 手動ビルド
 
-Ubuntu 20.04 LTS と macOS Big Sur でのビルドをサポートする．
+Ubuntu 20.04 LTS と macOS Ventura でのビルドをサポートする．
 なお，Windows では WSL2 により Ubuntu を利用できる．
 
 必要なもの
-- OpenJDK 11
+- OpenJDK 11+
 - sbt
-- Z3 4.8.8
-- scala-smtlib
+- Z3 4.8.14
 
-セットアップスクリプト ([./setup.sh](./setup.sh)) は以下の依存性を準備してビルドし，
+セットアップスクリプト ([./setup.sh](./setup.sh)) はZ3を準備してからビルドし，
 成果物が実行できるか確認する（JDK と sbt は事前に準備すること）．
 スクリプトは最初の一回だけ使えば良い．
 あとは通常通り sbt を使える．
 
 ### [Z3](https://github.com/Z3Prover/z3)
-プログラムは Z3 バージョン 4.8.8 の Java API を利用しているため，
+プログラムは Z3 バージョン 4.8.14 の Java API を利用しているため，
 ビルド時と実行時にそれぞれライブラリが必要．
-[ここ](https://github.com/Z3Prover/z3/releases/tag/z3-4.8.8)から
+[ここ](https://github.com/Z3Prover/z3/releases/tag/z3-4.8.14)から
 環境に応じた Zip ファイルをダウンロードする．
 
 - Z3 の `bin` ディレクトリから共有ライブラリを適切な場所にコピーする．
@@ -47,10 +46,6 @@ Ubuntu 20.04 LTS と macOS Big Sur でのビルドをサポートする．
      クされる）
 - Z3 の `bin/com.microsoft.z3.jar` を，ビルドディレクトリの `lib/` に
   配置する．
-
-### [scala-smtlib](https://github.com/regb/scala-smtlib)
-Scala 2.13 対応のバイナリは自動で解決されないので，自分でビルドしたものを `lib/` 以下に配置する
-([ビルド方法](https://github.com/regb/scala-smtlib#building-the-sources))．
 
 # 制約
 [./constraints](./constraints/) 以下に制約例がある．

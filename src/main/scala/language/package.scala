@@ -18,7 +18,7 @@ package object language {
 
   /** Construct DFA which accepts strings whose suffix is target.
     *  Each state i represents target.substring(0, i). */
-   def postfixDFA[A](target: Seq[A], in: Set[A]): DFA[Int, A] = {
+  def postfixDFA[A](target: Seq[A], in: Set[A]): DFA[Int, A] = {
     require(target.length > 0)
     // KMP backtracking table (taken and adapted from Wikipedia)
     val table: Vector[Int] = if (target.length == 1) { Vector(-1) }
